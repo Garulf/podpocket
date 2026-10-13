@@ -58,7 +58,16 @@ uvx --with tox-uv tox
 pre-commit install --hook-type pre-commit --hook-type pre-push
 ```
 
-Run the server locally with `uv run podpocket serve`.
+To run the server locally, keep its database and cache in the working directory:
+
+```sh
+PODPOCKET_PUBLIC_URL=http://localhost:8000 \
+PODPOCKET_DATABASE_URL=sqlite+aiosqlite:///./dev.db \
+PODPOCKET_CACHE_DIR=./cache \
+uv run podpocket serve
+```
+
+Add `PODPOCKET_ALLOW_PRIVATE_FEEDS=true` to fetch feeds from your LAN or localhost.
 {% endblock %}
 
 {% block contributing %}
