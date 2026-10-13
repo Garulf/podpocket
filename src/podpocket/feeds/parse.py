@@ -13,6 +13,7 @@ from podpocket.feeds.errors import FeedError
 EPISODE_TYPES = frozenset({"full", "trailer", "bonus"})
 _TAG = re.compile(r"<[^>]+>")
 _WHITESPACE = re.compile(r"\s+")
+_INT64 = range(-(2**63), 2**63)
 
 
 @dataclass(frozen=True)
@@ -130,9 +131,10 @@ def _published(entry: Any) -> datetime | None:
 
 def _integer(value: Any) -> int | None:
     try:
-        return int(str(value).strip())
+        number = int(str(value).strip())
     except (TypeError, ValueError):
         return None
+    return number if number in _INT64 else None
 
 
 def _attribute(value: Any, key: str) -> str | None:
@@ -145,7 +147,7 @@ def _clean(value: Any) -> str | None:
 
 def _first_category(channel: Any) -> str:
     tags = channel.get("tags") or []
-    return tags[0].get("term", "") if tags else ""
+    return (tags[0].get("term") or "") if tags else ""
 
 
 def _transcripts(value: Any) -> list[dict[str, str]]:

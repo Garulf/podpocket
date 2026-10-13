@@ -194,3 +194,36 @@ def test_published_falls_back_to_updated():
     ).episodes[0]
 
     assert episode.published == datetime(2026, 10, 1, tzinfo=UTC)
+
+
+def test_category_without_text_is_blank():
+    feed = parse_feed(rss(item(), channel="<itunes:category/>"))
+
+    assert feed.category == ""
+
+
+TOO_BIG = "100000000000000000000"
+
+
+def test_integers_outside_64_bits_are_dropped():
+    episode = parse_feed(
+        rss(
+            item(
+                url=None,
+                extra=(
+                    f'<enclosure url="https://x/a.mp3" length="{TOO_BIG}" type="audio/mpeg"/>'
+                    f"<itunes:season>{TOO_BIG}</itunes:season>"
+                    f"<itunes:episode>-{TOO_BIG}</itunes:episode>"
+                ),
+            )
+        )
+    ).episodes[0]
+
+    assert (episode.file_size, episode.season, episode.number) == (0, None, None)
+
+
+def test_largest_64_bit_integers_are_kept():
+    largest = 2**63 - 1
+    episode = parse_feed(rss(item(extra=f"<itunes:episode>{largest}</itunes:episode>"))).episodes[0]
+
+    assert episode.number == largest
