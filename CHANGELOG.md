@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/Garulf/podpocket/compare/v0.3.0...v0.4.0) (2026-10-13)
+
+
+### Features
+
+* tell signed-in apps the feed and guid of episodes ([4e9031c](https://github.com/Garulf/podpocket/commit/4e9031cdc0520d977ebf8ea7f4262b8caf5b23c6))
+
 ## [0.3.0](https://github.com/Garulf/podpocket/compare/v0.2.0...v0.3.0) (2026-10-13)
 
 
