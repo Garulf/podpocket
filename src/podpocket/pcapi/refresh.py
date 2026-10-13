@@ -1,3 +1,4 @@
+from itertools import zip_longest
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Form, Response
@@ -32,13 +33,15 @@ async def refresh_podcasts(
     podcasts: Annotated[str, Form()] = "",
     last_episodes: Annotated[str, Form()] = "",
 ) -> JSONResponse:
-    uuids = [uuid for uuid in _split(podcasts) if uuid]
-    lasts = _split(last_episodes)
-    await services.refresher.touch(uuids)
+    pairs = [
+        (uuid, last)
+        for uuid, last in zip_longest(_split(podcasts), _split(last_episodes), fillvalue="")
+        if uuid
+    ]
+    await services.refresher.touch(uuid for uuid, _ in pairs)
     updates = {}
     async with services.sessionmaker() as session:
-        for index, uuid in enumerate(uuids):
-            last = lasts[index] if index < len(lasts) else ""
+        for uuid, last in pairs:
             episodes = await catalog.episodes_after(
                 session, uuid, None if last in NO_KNOWN_EPISODE else last
             )

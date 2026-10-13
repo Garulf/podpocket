@@ -49,9 +49,7 @@ async def find_by_episode(podcast_uuid: str, episode_uuid: str, services: Servic
     podcast = await _fetched_podcast(services, podcast_uuid)
     async with services.sessionmaker() as session:
         episode = await catalog.find_episode(session, podcast_uuid, episode_uuid)
-    if episode is None:
-        raise HTTPException(status_code=404)
-    return serializers.podcast_full(podcast, [episode])
+    return serializers.podcast_full(podcast, [episode] if episode is not None else [])
 
 
 @router.get("/mobile/episode/url/{podcast_uuid}/{episode_uuid}")

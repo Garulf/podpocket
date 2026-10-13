@@ -122,6 +122,16 @@ async def test_find_by_episode_returns_only_that_episode(client, show):
     assert [e["uuid"] for e in response.json()["podcast"]["episodes"]] == [episodes["ep-1"]]
 
 
+async def test_find_by_episode_unknown_episode_returns_podcast_without_episodes(client, show):
+    uuid, _ = show
+
+    response = await client.get(f"/cache/mobile/podcast/findbyepisode/{uuid}/not-an-episode")
+
+    assert response.status_code == 200
+    podcast = response.json()["podcast"]
+    assert (podcast["uuid"], podcast["title"], podcast["episodes"]) == (uuid, "Cotton Talk", [])
+
+
 async def test_find_by_episode_wrong_podcast_is_404(client, show):
     _, episodes = show
 

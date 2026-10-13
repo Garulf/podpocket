@@ -107,6 +107,15 @@ async def test_update_tolerates_missing_last_episodes_and_unknown_podcasts(clien
     assert len(updates[uuid]) == 3
 
 
+async def test_update_pairs_last_episodes_by_position_before_skipping_blanks(client, show):
+    uuid, ids = show
+
+    response = await post_update(client, f"unknown-podcast,,{uuid}", f"x,y,{ids['ep-1']}")
+
+    updates = response.json()["result"]["podcast_updates"]
+    assert [e["uuid"] for e in updates[uuid]] == [ids["ep-3"], ids["ep-2"]]
+
+
 async def test_update_marks_podcasts_requested(client, show, services):
     uuid, ids = show
 
