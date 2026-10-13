@@ -1,8 +1,10 @@
 import re
+from dataclasses import replace
 
 import pytest
 
 from podpocket.catalog import list_episodes
+from podpocket.feeds import refresher as refresher_module
 from podpocket.ids import podcast_uuid
 from podpocket.models import Podcast
 from tests.factories import item, rss
@@ -172,6 +174,23 @@ async def test_search_with_broken_url_returns_error_envelope(
     assert body["message"]
     async with services.sessionmaker() as session:
         assert await session.get(Podcast, podcast_uuid("https://example.test/page")) is None
+
+
+async def test_search_with_feed_that_fails_to_store_returns_error_envelope(
+    respx_mock, client, services, monkeypatch
+):
+    respx_mock.get(FEED).respond(200, content=rss(item()))
+    real_parse = refresher_module.parse_feed
+    monkeypatch.setattr(
+        refresher_module, "parse_feed", lambda content: replace(real_parse(content), category=None)
+    )
+
+    response = await client.post("/refresh/podcasts/search", data={"q": FEED})
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "error"
+    async with services.sessionmaker() as session:
+        assert await session.get(Podcast, podcast_uuid(FEED)) is None
 
 
 async def test_search_with_text_returns_directory_results(respx_mock, client):
