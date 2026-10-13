@@ -1,0 +1,60 @@
+{% extends "base.md.j2" %}
+
+{% block install %}
+## What it is
+
+Pod Pocket server is the self-hosted backend for the Pod Pocket Android app, a Pocket Casts fork. It ingests podcast feeds and serves the catalogue, search and Discover APIs the app expects. Accounts and sync arrive in a later release.
+
+## Running it
+
+```sh
+docker run -p 8000:8000 \
+  -e PODPOCKET_PUBLIC_URL=https://pod.example.com \
+  -v podpocket-data:/data \
+  -v podpocket-cache:/cache \
+  ghcr.io/garulf/podpocket:latest
+```
+
+Put it behind a reverse proxy that terminates TLS. The server trusts the forwarded headers it receives, so do not expose port 8000 directly to the internet.
+{% endblock %}
+
+{% block usage %}
+## Configuration
+
+All settings are environment variables with the `PODPOCKET_` prefix.
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `PODPOCKET_PUBLIC_URL` | required | Externally reachable base URL. Absolute links in API responses are built from it. |
+| `PODPOCKET_DATABASE_URL` | `sqlite+aiosqlite:////data/podpocket.db` | SQLAlchemy database URL. Migrations run on startup. |
+| `PODPOCKET_CACHE_DIR` | `/cache` | Where cached artwork is stored. |
+| `PODPOCKET_REGION` | `us` | Region used for Discover content. |
+| `PODPOCKET_REFRESH_INTERVAL_MINUTES` | `30` | How often the scheduler refreshes subscribed feeds. |
+| `PODPOCKET_RUN_SCHEDULER` | `true` | Set to `false` to disable the background feed refresh. |
+| `PODPOCKET_ALLOW_PRIVATE_FEEDS` | `false` | By default the server only connects to public IP addresses, checked at connect time. Set to `true` for feeds hosted on your LAN. |
+| `PODPOCKET_MAX_FEED_BYTES` | `52428800` | Largest feed document accepted, in bytes. |
+| `PODPOCKET_MAX_IMAGE_BYTES` | `20971520` | Largest image accepted, in bytes. |
+
+## Path prefixes
+
+Each prefix replaces one Pocket Casts host, so the app only needs to be pointed at this server.
+
+| Prefix | Replaces |
+| --- | --- |
+| `/cache` | `cache.pocketcasts.com` |
+| `/refresh` | `refresh.pocketcasts.com` |
+| `/search` | `search.pocketcasts.com` |
+| `/static` | `static.pocketcasts.com` |
+{% endblock %}
+
+{% block extra %}
+## Development
+
+```sh
+uv sync
+uvx --with tox-uv tox
+pre-commit install --hook-type pre-commit --hook-type pre-push
+```
+
+Run the server locally with `uv run podpocket serve`.
+{% endblock %}
