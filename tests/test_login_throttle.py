@@ -97,6 +97,7 @@ async def test_a_login_over_capacity_is_refused_straight_away(client, alice, slo
         asyncio.create_task(client.post(LOGIN, json=credentials(f"nobody{n}"))) for n in range(3)
     ]
     await until(lambda: sum(login.done() for login in logins) == 2)
+    await until(lambda: hasher.active == 1)
 
     assert hasher.active == 1
     refused = [login.result() for login in logins if login.done()]

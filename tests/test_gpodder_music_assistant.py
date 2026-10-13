@@ -7,12 +7,14 @@ import pytest
 import uvicorn
 
 from podpocket.accounts.users import create_user
+from podpocket.models import Podcast, PodcastAlias
 from tests.api import PASSWORD
 from tests.gpodder import EPISODE_1, EPISODE_2, FEED, episode_id, episode_state, ingest, subscribe
 from tests.ma_gpodder.client import EpisodeActionNew, EpisodeActionPlay, GPodderClient
 from tests.records import episode_upload, records_of, sync_update
 
 DEVICE = "music-assistant"
+SERVER_TIMEOUT_SECONDS = 30
 
 
 @pytest.fixture
@@ -21,12 +23,14 @@ async def server_url(app):
     sock = socket.socket()
     sock.bind(("127.0.0.1", 0))
     task = asyncio.create_task(server.serve(sockets=[sock]))
-    while not server.started:
-        assert not task.done(), "the test server stopped"
-        await asyncio.sleep(0.01)
+    async with asyncio.timeout(SERVER_TIMEOUT_SECONDS):
+        while not server.started:
+            assert not task.done(), "the test server stopped"
+            await asyncio.sleep(0.01)
     yield f"http://127.0.0.1:{sock.getsockname()[1]}"
     server.should_exit = True
-    await task
+    async with asyncio.timeout(SERVER_TIMEOUT_SECONDS):
+        await task
 
 
 @pytest.fixture
@@ -109,6 +113,25 @@ async def test_finishing_in_music_assistant_marks_played(ma, services, respx_moc
     assert (state.played_up_to, state.playing_status) == (3600, 3)
 
 
+async def test_finishing_an_episode_a_few_seconds_short_of_the_feed_duration_marks_it_played(
+    ma, client, services, respx_mock, alice, alice_auth
+):
+    show = await ingest(respx_mock, services)
+    await subscribe(client, alice_auth, show)
+    cursor = (await sync_update(client, alice_auth)).last_modified
+
+    await ma.update_progress(
+        podcast_id=FEED, episode_id=EPISODE_1, guid="ep-1", position_s=3597, duration_s=3600
+    )
+
+    episodes = records_of(await sync_update(client, alice_auth, last_modified=cursor), "episode")
+    assert [(e.uuid, e.playing_status.value) for e in episodes] == [(episode_id(show), 3)]
+    actions, _ = await ma.get_episode_actions(since=0)
+    (finished,) = actions
+    assert isinstance(finished, EpisodeActionPlay)
+    assert finished.position == finished.total == 3600
+
+
 async def test_mark_unplayed_in_music_assistant(
     ma, client, services, respx_mock, alice, alice_auth
 ):
@@ -170,3 +193,24 @@ async def test_newer_app_progress_beats_music_assistant(
     actions, _ = await ma.get_episode_actions(since=0)
 
     assert [(a.episode, a.position) for a in actions] == [(EPISODE_1, 600)]
+
+
+async def test_moved_feed_reaches_music_assistant_and_old_url_progress_still_lands(
+    ma, client, services, respx_mock, alice, alice_auth
+):
+    show = await ingest(respx_mock, services)
+    await subscribe(client, alice_auth, show)
+    moved = "https://feeds.test/moved.xml"
+    async with services.sessionmaker() as session:
+        session.add(PodcastAlias(url=FEED, podcast_uuid=show))
+        (await session.get(Podcast, show)).feed_url = moved
+        await session.commit()
+
+    subscriptions = await ma.get_subscriptions()
+    await ma.update_progress(
+        podcast_id=FEED, episode_id=EPISODE_1, guid="ep-1", position_s=120, duration_s=3600
+    )
+
+    assert (subscriptions.add, subscriptions.remove) == ([moved], [FEED])
+    state = await episode_state(services, alice.uuid, episode_id(show))
+    assert (state.played_up_to, state.playing_status) == (120, 2)
