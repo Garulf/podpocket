@@ -126,3 +126,31 @@ async def test_blank_terms_return_nothing(client):
 
     assert autocomplete.json() == {"results": []}
     assert combined.json() == {"results": []}
+
+
+async def test_directory_entry_with_null_title_is_skipped(respx_mock, client):
+    broken = {
+        "kind": "podcast",
+        "collectionId": 9,
+        "collectionName": None,
+        "feedUrl": "https://feeds.test/n",
+    }
+    respx_mock.get(host="itunes.apple.com", path="/search").respond(
+        json={"results": [broken, ITUNES_RESULTS["results"][0]]}
+    )
+
+    response = await client.get("/search/autocomplete/search", params={"q": "radio"})
+
+    assert response.status_code == 200
+    assert [r["value"]["title"] for r in response.json()["results"]] == ["Radio Lab"]
+
+
+async def test_directory_results_that_are_not_a_list_leave_local_results(
+    respx_mock, client, local_show
+):
+    respx_mock.get(host="itunes.apple.com", path="/search").respond(json={"results": "oops"})
+
+    response = await client.get("/search/autocomplete/search", params={"q": "radio"})
+
+    assert response.status_code == 200
+    assert [r["value"]["uuid"] for r in response.json()["results"]] == [local_show]

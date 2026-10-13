@@ -34,6 +34,12 @@ def apple_podcast_id(url: str) -> str | None:
     return match.group(1) if match else None
 
 
+def _entries(url: str, results: Any) -> list[dict[str, Any]]:
+    if not isinstance(results, list):
+        raise DirectoryError(f"{url}: results is not a list")
+    return [entry for entry in results if isinstance(entry, dict)]
+
+
 class ITunesDirectory:
     def __init__(
         self,
@@ -71,24 +77,33 @@ class ITunesDirectory:
         return await self._cached(f"top:{limit}", TOP_CACHE_SECONDS, lambda: self._top(limit))
 
     async def _top(self, limit: int) -> list[DirectoryPodcast]:
-        data = await self._json(TOP_URL.format(country=self._country, limit=limit), {})
-        entries = data.get("feed", {}).get("results", [])
+        url = TOP_URL.format(country=self._country, limit=limit)
+        data = await self._json(url, {})
+        feed = data.get("feed")
+        entries = _entries(url, feed.get("results") if isinstance(feed, dict) else [])
         return await self.lookup([str(entry["id"]) for entry in entries if entry.get("id")])
 
     async def _podcasts(self, url: str, params: dict[str, Any]) -> list[DirectoryPodcast]:
         data = await self._json(url, params)
-        return [
-            DirectoryPodcast(
-                apple_id=str(entry.get("collectionId", "")),
-                feed_url=entry["feedUrl"],
-                title=entry.get("collectionName", ""),
-                author=entry.get("artistName", ""),
-                artwork_url=entry.get("artworkUrl600") or entry.get("artworkUrl100"),
-                category=entry.get("primaryGenreName", ""),
+        podcasts = []
+        for entry in _entries(url, data.get("results", [])):
+            title = (entry.get("collectionName") or "").strip()
+            feed_url = entry.get("feedUrl")
+            if not title or not isinstance(feed_url, str) or not feed_url:
+                continue
+            if entry.get("kind", "podcast") != "podcast":
+                continue
+            podcasts.append(
+                DirectoryPodcast(
+                    apple_id=str(entry.get("collectionId", "")),
+                    feed_url=feed_url,
+                    title=title,
+                    author=entry.get("artistName") or "",
+                    artwork_url=entry.get("artworkUrl600") or entry.get("artworkUrl100"),
+                    category=entry.get("primaryGenreName") or "",
+                )
             )
-            for entry in data.get("results", [])
-            if entry.get("feedUrl") and entry.get("kind", "podcast") == "podcast"
-        ]
+        return podcasts
 
     async def _json(self, url: str, params: dict[str, Any]) -> dict[str, Any]:
         try:
