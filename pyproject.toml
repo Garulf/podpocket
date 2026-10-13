@@ -6,12 +6,15 @@ requires-python = ">=3.13"
 dependencies = [
     "aiosqlite>=0.22",
     "alembic>=1.20",
+    "argon2-cffi>=25.1.0",
     "fastapi>=0.143",
     "feedparser>=6.0.14",
     "httpcore>=1.0.9",
     "httpx>=0.28",
     "pillow>=12.3",
+    "protobuf>=7.36.2",
     "pydantic-settings>=2.15",
+    "pyjwt>=2.15.1",
     "python-multipart>=0.0.32",
     "sqlalchemy[asyncio]>=2.1",
     "uvicorn[standard]>=0.54",
@@ -23,6 +26,7 @@ podpocket = "podpocket.cli:main"
 [dependency-groups]
 dev = [
     "asgi-lifespan>=2.1",
+    "grpcio-tools>=1.84.0",
     "pytest>=8",
     "pytest-asyncio>=1.4",
     "respx>=0.23",
@@ -41,7 +45,7 @@ testpaths = ["tests"]
 [tool.ruff]
 line-length = 100
 target-version = "py313"
-extend-exclude = ["src/podpocket/migrations/versions"]
+extend-exclude = ["src/podpocket/migrations/versions", "src/podpocket/protocol/sync_api_pb2.py"]
 force-exclude = true
 
 [tool.ruff.lint]

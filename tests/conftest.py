@@ -5,6 +5,8 @@ from asgi_lifespan import LifespanManager
 from podpocket.app import create_app
 from podpocket.config import Settings
 
+TEST_SECRET_KEY = "k" * 48
+
 
 @pytest.fixture
 def settings(tmp_path):
@@ -14,6 +16,7 @@ def settings(tmp_path):
         cache_dir=tmp_path / "cache",
         allow_private_feeds=True,
         run_scheduler=False,
+        secret_key=TEST_SECRET_KEY,
     )
 
 
