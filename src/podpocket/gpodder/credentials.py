@@ -2,7 +2,7 @@ import hmac
 import time
 from collections import OrderedDict
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from podpocket.accounts.users import Sessionmaker, normalize_login
 from podpocket.models import User
@@ -43,7 +43,11 @@ class CredentialCache:
         if user is None or not _still_matches(user, entry, login):
             self._verified.pop(fingerprint, None)
             return None
-        self._verified.move_to_end(fingerprint)
+        if self._verified.get(fingerprint) is entry:
+            self._verified[fingerprint] = replace(
+                entry, expires_at=self._clock() + CREDENTIAL_TTL_SECONDS
+            )
+            self._verified.move_to_end(fingerprint)
         return user
 
     def remember(self, login: str, password: str, user: User) -> None:

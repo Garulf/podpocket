@@ -41,7 +41,7 @@ async def subscription_delta(
     aliases = (
         select(PodcastAlias.url)
         .join(Subscription, Subscription.podcast_uuid == PodcastAlias.podcast_uuid)
-        .where(Subscription.user_uuid == user_uuid, Subscription.subscribed.is_(True))
+        .where(Subscription.user_uuid == user_uuid)
     )
     if since_ms > 0:
         changed = select(ChangeLog.entity_id).where(
@@ -62,10 +62,12 @@ async def subscription_delta(
 
 
 def _cleaned(raw: str, update_urls: list[list[str]]) -> str:
+    if len(raw) > MAX_URL_LENGTH:
+        return ""
     try:
-        url = normalize_feed_url(raw) if len(raw) <= MAX_URL_LENGTH else ""
+        url = normalize_feed_url(raw)
     except ValueError:
-        url = ""
+        return ""
     if url != raw:
         update_urls.append([raw, url])
     return url
@@ -95,11 +97,20 @@ async def ensure_podcasts(sessionmaker: async_sessionmaker[AsyncSession], urls: 
                     raise
 
 
+async def _resolve(session: AsyncSession, urls: list[str]) -> list[str]:
+    uuids: list[str] = []
+    for url in urls:
+        podcast = await find_podcast_by_url(session, url)
+        if podcast is not None:
+            uuids.append(podcast.uuid)
+    return uuids
+
+
 async def apply_subscription_upload(writer: ChangeWriter, upload: SubscriptionUpload) -> None:
-    changes: list[PodcastChange] = []
-    for urls, subscribed in ((upload.add, True), (upload.remove, False)):
-        for url in urls:
-            podcast = await find_podcast_by_url(writer.session, url)
-            if podcast is not None:
-                changes.append(PodcastChange(podcast_uuid=podcast.uuid, subscribed=subscribed))
+    added = await _resolve(writer.session, upload.add)
+    removed = await _resolve(writer.session, upload.remove)
+    if set(added) & set(removed):
+        raise AddedAndRemoved("a feed was both added and removed")
+    changes = [PodcastChange(podcast_uuid=uuid, subscribed=True) for uuid in added]
+    changes += [PodcastChange(podcast_uuid=uuid, subscribed=False) for uuid in removed]
     await apply_podcast_changes(writer, changes)

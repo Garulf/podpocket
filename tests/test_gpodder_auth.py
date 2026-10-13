@@ -271,7 +271,9 @@ async def test_verified_credentials_ignore_the_lockout(client, alice):
     assert (await client.post(LOGIN, headers=basic("alice"))).status_code == 200
 
 
-async def test_verified_credentials_expire(client, services, alice, hashing_checks):
+async def test_verified_credentials_expire_after_a_ttl_of_disuse(
+    client, services, alice, hashing_checks
+):
     clock = Clock()
     services.gpodder_credentials = CredentialCache("k" * 48, clock)
     await client.post(LOGIN, headers=basic("alice"))
@@ -279,7 +281,7 @@ async def test_verified_credentials_expire(client, services, alice, hashing_chec
     await client.post(LOGIN, headers=basic("alice"))
     assert len(hashing_checks) == 1
 
-    clock.now += 1
+    clock.now += credentials.CREDENTIAL_TTL_SECONDS
     await client.post(LOGIN, headers=basic("alice"))
 
     assert len(hashing_checks) == 2
@@ -330,3 +332,64 @@ def test_the_cache_keys_hide_the_credentials():
     assert len(fingerprint) == 32
     assert b"correct" not in fingerprint
     assert fingerprint != CredentialCache("j" * 48)._fingerprint("alice", "correct horse battery")
+
+
+async def test_wrong_passwords_after_a_cache_hit_still_count_toward_the_lockout(client, alice):
+    await client.post(LOGIN, headers=basic("alice"))
+    await client.post(LOGIN, headers=basic("alice"))
+    for _ in range(MAX_FAILURES):
+        assert (
+            await client.post(LOGIN, headers=basic("alice", "wrong password"))
+        ).status_code == 401
+
+    locked = await client.post(LOGIN, headers=basic("alice", "another wrong password"))
+
+    assert locked.status_code == 429
+
+
+async def test_verified_credentials_stay_valid_while_in_use(
+    client, services, alice, hashing_checks
+):
+    clock = Clock()
+    services.gpodder_credentials = CredentialCache("k" * 48, clock)
+    await client.post(LOGIN, headers=basic("alice"))
+    for _ in range(3):
+        clock.now += credentials.CREDENTIAL_TTL_SECONDS - 1
+        assert (await client.post(LOGIN, headers=basic("alice"))).status_code == 200
+    assert len(hashing_checks) == 1
+
+    clock.now += credentials.CREDENTIAL_TTL_SECONDS
+    await client.post(LOGIN, headers=basic("alice"))
+
+    assert len(hashing_checks) == 2
+
+
+class EvictingSessionmaker:
+    def __init__(self, sessionmaker, cache):
+        self._sessionmaker = sessionmaker
+        self._cache = cache
+
+    def __call__(self):
+        return self
+
+    async def __aenter__(self):
+        self._session = await self._sessionmaker().__aenter__()
+        return self
+
+    async def __aexit__(self, *exc):
+        return await self._session.__aexit__(*exc)
+
+    async def get(self, *args):
+        row = await self._session.get(*args)
+        self._cache._verified.clear()
+        return row
+
+
+async def test_an_entry_evicted_during_the_lookup_is_not_an_error(services, alice):
+    cache = CredentialCache("k" * 48)
+    cache.remember("alice", PASSWORD, alice)
+
+    user = await cache.lookup(EvictingSessionmaker(services.sessionmaker, cache), "alice", PASSWORD)
+
+    assert user.uuid == alice.uuid
+    assert cache._verified == {}

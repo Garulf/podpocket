@@ -39,6 +39,10 @@ def _change_count(body: Any) -> int:
     )
 
 
+def _conflict() -> HTTPException:
+    return HTTPException(status_code=400, detail="a feed was both added and removed")
+
+
 async def _cursor(session: AsyncSession, user: User) -> int:
     cursor = await session.scalar(select(User.last_change_ms).where(User.uuid == user.uuid))
     if cursor is None:
@@ -79,13 +83,16 @@ async def upload_subscriptions(
     except ValidationError as exc:
         raise HTTPException(status_code=400, detail="invalid subscription changes") from exc
     except AddedAndRemoved as exc:
-        raise HTTPException(status_code=400, detail="a feed was both added and removed") from exc
+        raise _conflict() from exc
     await ensure_podcasts(services.sessionmaker, upload.add)
     async with services.sessionmaker() as session:
         writer = await ChangeWriter.begin(
             session, user.uuid, source=GPODDER_SOURCE, now_ms=now_ms()
         )
-        await apply_subscription_upload(writer, upload)
+        try:
+            await apply_subscription_upload(writer, upload)
+        except AddedAndRemoved as exc:
+            raise _conflict() from exc
         cursor = writer.cursor
         await session.commit()
     return {"timestamp": cursor, "update_urls": upload.update_urls}

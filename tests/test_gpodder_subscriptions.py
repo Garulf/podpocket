@@ -122,13 +122,23 @@ async def test_remove_unsubscribes(client, services, respx_mock, alice, alice_au
         assert (await session.get(Subscription, (alice.uuid, show))).subscribed is False
 
 
-async def test_rewritten_and_rejected_urls_are_reported(client, alice):
-    response = await upload(client, add=["HTTPS://Feeds.Test/a.xml", "ftp://feeds.test/b.xml"])
+async def test_rewritten_urls_are_reported_and_rejected_ones_are_not(client, alice):
+    response = await upload(
+        client, add=["HTTPS://Feeds.Test/a.xml", "ftp://feeds.test/b.xml", "https://feeds.test/c"]
+    )
 
     assert response.json()["update_urls"] == [
-        ["HTTPS://Feeds.Test/a.xml", "https://feeds.test/a.xml"],
-        ["ftp://feeds.test/b.xml", ""],
+        ["HTTPS://Feeds.Test/a.xml", "https://feeds.test/a.xml"]
     ]
+
+
+async def test_over_long_urls_are_dropped_without_echo(client, alice):
+    response = await upload(client, add=["https://feeds.test/" + "x" * 5000, "z" * 5000])
+
+    assert response.status_code == 200
+    assert response.json()["update_urls"] == []
+    assert "xxxxxxxxxx" not in response.text
+    assert "zzzzzzzzzz" not in response.text
 
 
 async def test_removing_an_unknown_feed_is_a_no_op(client, alice):
@@ -169,3 +179,40 @@ async def test_too_many_changes_are_rejected(client, alice):
     response = await upload(client, add=urls)
 
     assert response.status_code == 413
+
+
+async def test_unsubscribed_moved_feed_lists_both_urls_as_removed(
+    client, services, respx_mock, alice_auth
+):
+    show = await ingest(respx_mock, services)
+    async with services.sessionmaker() as session:
+        podcast = await session.get(Podcast, show)
+        session.add(PodcastAlias(url=FEED, podcast_uuid=show))
+        podcast.feed_url = "https://feeds.test/moved.xml"
+        await session.commit()
+    await subscribe(client, alice_auth, show)
+    await subscribe(client, alice_auth, show, subscribed=False)
+
+    body = await read(client)
+
+    assert (body["add"], body["remove"]) == ([], ["https://feeds.test/moved.xml", FEED])
+
+
+async def test_adding_the_new_url_and_removing_the_old_one_is_a_conflict(
+    client, services, respx_mock, alice, alice_auth
+):
+    show = await ingest(respx_mock, services)
+    moved = "https://feeds.test/moved.xml"
+    async with services.sessionmaker() as session:
+        podcast = await session.get(Podcast, show)
+        session.add(PodcastAlias(url=FEED, podcast_uuid=show))
+        podcast.feed_url = moved
+        await session.commit()
+    await subscribe(client, alice_auth, show)
+
+    response = await upload(client, add=[moved], remove=[FEED])
+
+    assert response.status_code == 400
+    assert moved not in response.text
+    async with services.sessionmaker() as session:
+        assert (await session.get(Subscription, (alice.uuid, show))).subscribed is True
