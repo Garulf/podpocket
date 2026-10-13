@@ -166,7 +166,7 @@ async def merge(
     async with services.sessionmaker() as session:
         writer = await ChangeWriter.begin(session, user_uuid, source=APP_SOURCE, now_ms=now)
         changed = await apply(writer, list(items))
-        await session.commit()
+        await writer.commit()
     return changed
 
 

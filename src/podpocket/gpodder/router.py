@@ -106,7 +106,7 @@ async def upload_subscriptions(
         except AddedAndRemoved as exc:
             raise _conflict() from exc
         cursor = writer.cursor
-        await session.commit()
+        await writer.commit()
     return {"timestamp": cursor, "update_urls": upload.update_urls}
 
 
@@ -141,7 +141,7 @@ async def upload_episode_actions(
         writer = await ChangeWriter.begin(session, user.uuid, source=GPODDER_SOURCE, now_ms=now)
         await apply_episode_changes(writer, changes)
         cursor = writer.cursor
-        await session.commit()
+        await writer.commit()
     logger.info(
         "gpodder episode actions: %d applied, %d unmatched, %d ignored",
         report.applied,

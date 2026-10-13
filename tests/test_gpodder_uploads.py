@@ -3,7 +3,7 @@ import logging
 from datetime import UTC, datetime
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from podpocket.gpodder import router
 from podpocket.ids import episode_uuid, podcast_uuid
@@ -15,6 +15,7 @@ from tests.gpodder import (
     FEED,
     basic,
     catalog_selects,
+    change_log_inserts,
     episode_id,
     episode_state,
     ingest,
@@ -513,3 +514,16 @@ async def test_a_large_upload_does_not_hold_the_write_lock_while_matching(
 
     assert response.status_code == 200
     assert matched_while_writing == [1000]
+
+
+async def test_a_large_upload_writes_its_change_log_in_one_statement(client, services, alice):
+    await seed_catalog(services, feeds=500)
+
+    with change_log_inserts(services) as inserts:
+        response = await post_actions(client, "alice", seeded_plays(500))
+
+    assert response.status_code == 200
+    assert len(inserts) == 1
+    async with services.sessionmaker() as session:
+        logged = await session.scalar(select(func.count()).select_from(ChangeLog))
+    assert logged == 3000

@@ -25,7 +25,7 @@ async def write(services, user_uuid, now_ms, *entries):
         writer = await ChangeWriter.begin(session, user_uuid, source="app", now_ms=now_ms)
         for entity, entity_id, field, modified in entries:
             writer.record(entity, entity_id, field, modified)
-        await session.commit()
+        await writer.commit()
         return writer.cursor
 
 
@@ -117,3 +117,22 @@ def test_wins_prefers_newer_and_breaks_ties_by_value():
     assert wins(5, "b", 5, "a")
     assert not wins(5, "a", 5, "b")
     assert not wins(5, "a", 5, "a")
+
+
+async def test_committing_the_session_with_buffered_changes_is_refused(services, alice):
+    async with services.sessionmaker() as session:
+        writer = await ChangeWriter.begin(session, alice.uuid, source="app", now_ms=1000)
+        writer.record("episode", "e1", "played_up_to", 1000)
+
+        with pytest.raises(RuntimeError, match="ChangeWriter.commit"):
+            await session.commit()
+
+
+async def test_changes_are_visible_to_reads_after_flush(services, alice):
+    async with services.sessionmaker() as session:
+        writer = await ChangeWriter.begin(session, alice.uuid, source="app", now_ms=1000)
+        writer.record("episode", "e1", "played_up_to", 1000)
+        await writer.flush()
+
+        assert dict(await changed_since(session, alice.uuid, 0)) == {"episode": {"e1"}}
+        await writer.commit()

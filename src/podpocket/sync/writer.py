@@ -2,7 +2,7 @@ from collections import defaultdict
 from collections.abc import Iterable, Iterator, Sequence
 from typing import Any, Self
 
-from sqlalchemy import select, update
+from sqlalchemy import event, insert, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from podpocket.models import ChangeLog, User
@@ -80,6 +80,8 @@ class ChangeWriter:
         self.source = source
         self.now_ms = now_ms
         self._stamp: int | None = None
+        self._log: list[dict[str, Any]] = []
+        event.listen(session.sync_session, "before_commit", self._refuse_unflushed_log)
 
     @classmethod
     async def begin(
@@ -95,17 +97,30 @@ class ChangeWriter:
         if self._stamp is None:
             self._stamp = max(self.now_ms, self.user.last_change_ms + 1)
             self.user.last_change_ms = self._stamp
-        self.session.add(
-            ChangeLog(
-                user_uuid=self.user_uuid,
-                entity=entity,
-                entity_id=entity_id,
-                field=field,
-                modified_ms=modified_ms,
-                server_ms=self._stamp,
-                source=self.source,
-            )
+        self._log.append(
+            {
+                "user_uuid": self.user_uuid,
+                "entity": entity,
+                "entity_id": entity_id,
+                "field": field,
+                "modified_ms": modified_ms,
+                "server_ms": self._stamp,
+                "source": self.source,
+            }
         )
+
+    async def flush(self) -> None:
+        if self._log:
+            rows, self._log = self._log, []
+            await self.session.execute(insert(ChangeLog.__table__), rows)
+
+    async def commit(self) -> None:
+        await self.flush()
+        await self.session.commit()
+
+    def _refuse_unflushed_log(self, session: Any) -> None:
+        if self._log:
+            raise RuntimeError("change_log rows are buffered: commit with ChangeWriter.commit()")
 
 
 async def changed_since(

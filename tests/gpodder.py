@@ -105,17 +105,15 @@ async def write_as(services, user, podcast: str) -> None:
     async with services.sessionmaker() as session:
         writer = await ChangeWriter.begin(session, user.uuid, source=APP_SOURCE, now_ms=now_ms())
         await apply_podcast_changes(writer, [PodcastChange(podcast_uuid=podcast, subscribed=True)])
-        await session.commit()
+        await writer.commit()
 
 
 @contextmanager
-def catalog_selects(services):
+def recorded_statements(services, wanted):
     statements: list[str] = []
 
     def record(connection, cursor, statement, parameters, context, executemany) -> None:
-        if statement.lstrip().startswith("SELECT") and any(
-            f"FROM {table}" in statement for table in ("podcasts", "podcast_aliases", "episodes")
-        ):
+        if wanted(statement.lstrip()):
             statements.append(statement)
 
     engine = services.sessionmaker.kw["bind"].sync_engine
@@ -124,3 +122,19 @@ def catalog_selects(services):
         yield statements
     finally:
         event.remove(engine, "before_cursor_execute", record)
+
+
+def catalog_selects(services):
+    tables = ("podcasts", "podcast_aliases", "episodes")
+    return recorded_statements(
+        services,
+        lambda statement: (
+            statement.startswith("SELECT") and any(f"FROM {table}" in statement for table in tables)
+        ),
+    )
+
+
+def change_log_inserts(services):
+    return recorded_statements(
+        services, lambda statement: statement.startswith("INSERT INTO change_log")
+    )

@@ -56,12 +56,13 @@ async def sync_update(request: Request, user: CurrentUser, services: ServicesDep
         await apply_bookmark_records(writer, uploaded[BOOKMARK])
         await apply_device_records(session, user.uuid, uploaded[DEVICE])
         await session.flush()
+        await writer.flush()
         touched = await changed_since(session, user.uuid, message.last_modified)
         for entity, keys in _uploaded_keys(uploaded).items():
             touched[entity] |= keys
         records = await _records(session, user.uuid, touched)
         cursor = writer.cursor
-        await session.commit()
+        await writer.commit()
     return protobuf_response(pb.SyncUpdateResponse(last_modified=cursor, records=records))
 
 
