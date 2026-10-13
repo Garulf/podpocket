@@ -12,7 +12,7 @@ Pod Pocket server is the self-hosted backend for the Pod Pocket Android app, a P
 ```sh
 docker run -p 8000:8000 \
   -e PODPOCKET_PUBLIC_URL=https://pod.example.com \
-  -e PODPOCKET_SECRET_KEY=replace-with-your-own-key \
+  -e PODPOCKET_SECRET_KEY="$(openssl rand -hex 32)" \
   -v podpocket-data:/data \
   -v podpocket-cache:/cache \
   ghcr.io/garulf/podpocket:latest
@@ -20,7 +20,7 @@ docker run -p 8000:8000 \
 
 The container runs as uid 1000. Named volumes work as is, but a bind-mounted `/data` or `/cache` must be writable by that uid.
 
-Generate the secret key once and keep it. It signs the access tokens, so changing it signs every device out. Any 32 or more random characters work, for example the output of `python3 -c 'import secrets; print(secrets.token_urlsafe(48))'`.
+Generate the secret key once and keep it, for example with `openssl rand -hex 32`. Any 32 or more random characters work. The example above only generates a key for that one run, so store the value you use and pass the same one every time you start the container. The key signs access tokens. If you change it, current access tokens stop working and each app renews its own with its refresh token, so nobody has to sign in again. To sign a user out, use `podpocket user passwd` or `podpocket user remove`.
 
 Put it behind a reverse proxy that terminates TLS. The server trusts the forwarded headers it receives, so do not expose port 8000 directly to the internet.
 
@@ -62,10 +62,17 @@ There is no sign-up in the app. The administrator manages accounts with the `pod
 | --- | --- |
 | `docker exec -it <container> podpocket user add NAME --email EMAIL` | Creates an account. Add `--admin` to mark it as an administrator. |
 | `docker exec -it <container> podpocket user passwd NAME` | Sets a new password and signs every device of that user out. |
-| `docker exec -it <container> podpocket user remove NAME` | Deletes the account and all of its synced data. Asks first unless you pass `--yes`. |
+| `docker exec -it <container> podpocket user remove NAME` | Deletes the account and all of its synced data. Its devices get a 401 and are signed out. Asks first unless you pass `--yes`. |
 | `docker exec -it <container> podpocket user list` | Lists accounts. |
 
 `user add` and `user passwd` ask for the password twice; with `--password-stdin` they read one line from standard input instead. In the app, the email field accepts either the username or the email.
+
+## Accounts and sync
+
+- Each device session keeps its own refresh token. A replaced token stays usable for 24 hours, so a device that missed the response to a renewal does not get signed out.
+- Change timestamps from devices are capped at the server's current time, so a device with a fast clock cannot win every merge.
+- The Up Next queue holds at most 10,000 episodes.
+- Validation errors never echo the request body back.
 
 ## Development
 
