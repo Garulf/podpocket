@@ -1,16 +1,18 @@
+import asyncio
 from datetime import UTC, datetime, timedelta
 
 import httpx
 import jwt
 import pytest
 from fastapi import FastAPI
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from podpocket.accounts import tokens as tokens_module
 from podpocket.accounts.dependencies import CurrentUser
 from podpocket.accounts.tokens import InvalidToken, TokenService
 from podpocket.accounts.users import remove_user, set_password
-from podpocket.models import RefreshToken, User
+from podpocket.models import RefreshToken, RefreshTokenHash, User
 from tests.factories import FakeClock
 
 SECRET = "t" * 40
@@ -20,6 +22,15 @@ START = datetime(2026, 10, 12, 12, 0, tzinfo=UTC)
 @pytest.fixture
 def clock():
     return FakeClock(START)
+
+
+async def live_hashes(services):
+    async with services.sessionmaker() as session:
+        return (
+            await session.scalars(
+                select(RefreshTokenHash.token_hash).where(RefreshTokenHash.superseded_at.is_(None))
+            )
+        ).all()
 
 
 @pytest.fixture
@@ -63,16 +74,13 @@ async def test_refresh_rotates_the_refresh_token(tokens, alice):
     first = await tokens.issue(alice, "mobile")
 
     user, second = await tokens.refresh(first.refresh_token)
-    await tokens.refresh(second.refresh_token)
 
     assert user.uuid == alice.uuid
     assert second.refresh_token != first.refresh_token
     assert (await tokens.authenticate(second.access_token)).uuid == alice.uuid
-    with pytest.raises(InvalidToken):
-        await tokens.refresh(first.refresh_token)
 
 
-async def test_previous_refresh_token_survives_a_lost_response(tokens, alice):
+async def test_superseded_refresh_token_survives_a_lost_response(tokens, alice):
     first = await tokens.issue(alice, "mobile")
     await tokens.refresh(first.refresh_token)
 
@@ -82,17 +90,19 @@ async def test_previous_refresh_token_survives_a_lost_response(tokens, alice):
     assert (await tokens.authenticate(later.access_token)).uuid == alice.uuid
 
 
-async def test_previous_refresh_token_stops_working_after_a_day(tokens, alice, clock):
+async def test_superseded_refresh_token_stops_working_after_a_day(tokens, alice, clock):
     first = await tokens.issue(alice, "mobile")
     await tokens.refresh(first.refresh_token)
 
-    clock.advance(timedelta(days=1, seconds=1))
+    clock.advance(timedelta(hours=23, minutes=59))
+    await tokens.refresh(first.refresh_token)
+    clock.advance(timedelta(minutes=2))
 
     with pytest.raises(InvalidToken):
         await tokens.refresh(first.refresh_token)
 
 
-async def test_previous_refresh_token_does_not_extend_its_own_grace(tokens, alice, clock):
+async def test_superseded_refresh_token_does_not_extend_its_own_grace(tokens, alice, clock):
     first = await tokens.issue(alice, "mobile")
     await tokens.refresh(first.refresh_token)
 
@@ -104,19 +114,84 @@ async def test_previous_refresh_token_does_not_extend_its_own_grace(tokens, alic
         await tokens.refresh(first.refresh_token)
 
 
-async def test_refresh_that_loses_a_race_with_a_sign_out_is_rejected(services, alice, clock):
-    rival = services.sessionmaker
+async def test_refresh_token_unused_for_days_still_works_until_superseded(tokens, alice, clock):
+    issued = await tokens.issue(alice, "mobile")
 
+    clock.advance(timedelta(days=90))
+    _, rotated = await tokens.refresh(issued.refresh_token)
+
+    assert rotated.refresh_token != issued.refresh_token
+
+
+async def test_two_refreshes_with_the_same_token_both_succeed(tokens, alice, clock):
+    issued = await tokens.issue(alice, "mobile")
+
+    results = await asyncio.gather(
+        tokens.refresh(issued.refresh_token), tokens.refresh(issued.refresh_token)
+    )
+
+    fresh = [rotated.refresh_token for _, rotated in results]
+    assert len(set(fresh)) == 2
+    clock.advance(timedelta(days=3))
+    for refresh_token in fresh:
+        _, again = await tokens.refresh(refresh_token)
+        assert (await tokens.authenticate(again.access_token)).uuid == alice.uuid
+
+
+async def test_many_racing_refreshes_keep_at_most_five_live_tokens(tokens, services, alice):
+    issued = await tokens.issue(alice, "mobile")
+
+    await asyncio.gather(*(tokens.refresh(issued.refresh_token) for _ in range(8)))
+
+    assert len(await live_hashes(services)) == 5
+
+
+async def test_live_tokens_beyond_five_supersede_the_oldest(tokens, services, alice, clock):
+    issued = await tokens.issue(alice, "mobile")
+    async with services.sessionmaker() as session:
+        session_id = await session.scalar(select(RefreshToken.id))
+        session.add_all(
+            RefreshTokenHash(
+                token_hash=f"{n:064d}",
+                session_id=session_id,
+                created_at=START + timedelta(minutes=n),
+                superseded_at=None,
+            )
+            for n in range(1, 7)
+        )
+        await session.commit()
+    clock.advance(timedelta(hours=1))
+
+    await tokens.refresh(issued.refresh_token)
+
+    live = await live_hashes(services)
+    assert len(live) == 5
+    assert {f"{n:064d}" for n in (3, 4, 5, 6)} <= set(live)
+    assert not {f"{n:064d}" for n in (1, 2)} & set(live)
+
+
+async def test_hashes_superseded_more_than_a_day_ago_are_pruned(tokens, services, alice, clock):
+    first = await tokens.issue(alice, "mobile")
+    _, second = await tokens.refresh(first.refresh_token)
+
+    clock.advance(timedelta(days=2))
+    await tokens.refresh(second.refresh_token)
+
+    async with services.sessionmaker() as session:
+        stored = set((await session.scalars(select(RefreshTokenHash.token_hash))).all())
+    assert tokens_module._digest(first.refresh_token) not in stored
+    assert tokens_module._digest(second.refresh_token) in stored
+
+
+async def test_refresh_that_loses_a_race_with_a_sign_out_is_rejected(services, alice, clock):
     class SignsOutAfterUserLoad(AsyncSession):
         async def get(self, entity, ident, **kwargs):
             user = await super().get(entity, ident, **kwargs)
             if entity is User:
-                async with rival() as other:
-                    await other.execute(delete(RefreshToken))
-                    await other.commit()
+                await self.execute(delete(RefreshToken))
             return user
 
-    racing = async_sessionmaker(rival.kw["bind"], class_=SignsOutAfterUserLoad)
+    racing = async_sessionmaker(services.sessionmaker.kw["bind"], class_=SignsOutAfterUserLoad)
     tokens = TokenService(racing, SECRET, timedelta(hours=1), clock=clock)
     issued = await tokens.issue(alice, "mobile")
 

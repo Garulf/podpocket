@@ -21,10 +21,8 @@ async def add_refresh_token(services, user, token_id):
             RefreshToken(
                 id=token_id,
                 user_uuid=user.uuid,
-                token_hash=token_id * 32,
                 scope="mobile",
                 created_at=user.created_at,
-                rotated_at=user.created_at,
             )
         )
         await session.commit()

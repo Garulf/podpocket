@@ -6,13 +6,15 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 import jwt
-from sqlalchemy import or_, select, update
+from sqlalchemy import delete, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from podpocket.models import RefreshToken, User
+from podpocket.models import RefreshToken, RefreshTokenHash, User
 
 ALGORITHM = "HS256"
-PREVIOUS_TOKEN_GRACE = timedelta(days=1)
+SUPERSEDED_TOKEN_GRACE = timedelta(days=1)
+MAX_LIVE_TOKENS_PER_SESSION = 5
 REQUIRED_CLAIMS = ["exp", "sub", "sid"]
 MAX_TOKEN_LENGTH = 4096
 
@@ -60,14 +62,15 @@ class TokenService:
         session_id = str(uuid.uuid4())
         async with self._sessionmaker() as session:
             session.add(
-                RefreshToken(
-                    id=session_id,
-                    user_uuid=user.uuid,
+                RefreshToken(id=session_id, user_uuid=user.uuid, scope=scope, created_at=now)
+            )
+            await session.flush()
+            session.add(
+                RefreshTokenHash(
                     token_hash=_digest(refresh_token),
-                    previous_hash=None,
-                    scope=scope,
+                    session_id=session_id,
                     created_at=now,
-                    rotated_at=now,
+                    superseded_at=None,
                 )
             )
             await session.commit()
@@ -79,32 +82,66 @@ class TokenService:
         digest = _digest(refresh_token)
         fresh = secrets.token_urlsafe(32)
         async with self._sessionmaker() as session:
-            row = await session.scalar(
-                select(RefreshToken).where(
-                    or_(RefreshToken.token_hash == digest, RefreshToken.previous_hash == digest)
+            await session.execute(
+                update(RefreshTokenHash)
+                .where(
+                    RefreshTokenHash.token_hash == digest, RefreshTokenHash.superseded_at.is_(None)
                 )
+                .values(superseded_at=now)
             )
-            if row is None:
+            presented = await session.scalar(
+                select(RefreshTokenHash).where(RefreshTokenHash.token_hash == digest)
+            )
+            if presented is None:
                 raise InvalidToken("unknown refresh token")
-            is_current = row.token_hash == digest
-            if not is_current and row.rotated_at < now - PREVIOUS_TOKEN_GRACE:
+            if presented.superseded_at is not None and (
+                presented.superseded_at <= now - SUPERSEDED_TOKEN_GRACE
+            ):
                 raise InvalidToken("refresh token was replaced")
-            user = await session.get(User, row.user_uuid)
+            session_id = presented.session_id
+            login = await session.get(RefreshToken, session_id)
+            user = None if login is None else await session.get(User, login.user_uuid)
             if user is None:
                 raise InvalidToken("signed out")
-            session_id = row.id
-            rotation = {"token_hash": _digest(fresh)}
-            if is_current:
-                rotation |= {"previous_hash": digest, "rotated_at": now}
-            result = await session.execute(
-                update(RefreshToken)
-                .where(RefreshToken.id == session_id, RefreshToken.token_hash == row.token_hash)
-                .values(**rotation)
-            )
-            if result.rowcount == 0:
-                raise InvalidToken("signed out")
-            await session.commit()
+            try:
+                session.add(
+                    RefreshTokenHash(
+                        token_hash=_digest(fresh),
+                        session_id=session_id,
+                        created_at=now,
+                        superseded_at=None,
+                    )
+                )
+                await self._prune(session, session_id, now)
+                await session.commit()
+            except IntegrityError as exc:
+                raise InvalidToken("signed out") from exc
         return user, self._issued(user.uuid, session_id, fresh, now)
+
+    async def _prune(self, session: AsyncSession, session_id: str, now: datetime) -> None:
+        await session.execute(
+            delete(RefreshTokenHash).where(
+                RefreshTokenHash.session_id == session_id,
+                RefreshTokenHash.superseded_at < now - SUPERSEDED_TOKEN_GRACE,
+            )
+        )
+        surplus = (
+            await session.scalars(
+                select(RefreshTokenHash.token_hash)
+                .where(
+                    RefreshTokenHash.session_id == session_id,
+                    RefreshTokenHash.superseded_at.is_(None),
+                )
+                .order_by(RefreshTokenHash.created_at.desc())
+                .offset(MAX_LIVE_TOKENS_PER_SESSION)
+            )
+        ).all()
+        if surplus:
+            await session.execute(
+                update(RefreshTokenHash)
+                .where(RefreshTokenHash.token_hash.in_(surplus))
+                .values(superseded_at=now)
+            )
 
     async def authenticate(self, access_token: str) -> User:
         _require_plausible(access_token)

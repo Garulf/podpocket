@@ -40,10 +40,8 @@ def owned_rows(user_uuid):
         RefreshToken(
             id="s1",
             user_uuid=user_uuid,
-            token_hash="a" * 64,
             scope="mobile",
             created_at=NOW,
-            rotated_at=NOW,
         ),
         Subscription(user_uuid=user_uuid, podcast_uuid="p", subscribed=True),
         Folder(user_uuid=user_uuid, folder_uuid="f", date_added=NOW),

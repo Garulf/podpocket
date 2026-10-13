@@ -89,11 +89,19 @@ class RefreshToken(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     user_uuid: Mapped[str] = mapped_column(ForeignKey("users.uuid", ondelete="CASCADE"), index=True)
-    token_hash: Mapped[str] = mapped_column(String(64), unique=True)
-    previous_hash: Mapped[str | None] = mapped_column(String(64), index=True)
     scope: Mapped[str] = mapped_column(String(32), default="mobile")
     created_at: Mapped[datetime] = mapped_column(UTCDateTime)
-    rotated_at: Mapped[datetime] = mapped_column(UTCDateTime)
+
+
+class RefreshTokenHash(Base):
+    __tablename__ = "refresh_token_hashes"
+
+    token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    session_id: Mapped[str] = mapped_column(
+        ForeignKey("refresh_tokens.id", ondelete="CASCADE"), index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime)
+    superseded_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
 
 
 class Subscription(Base):
