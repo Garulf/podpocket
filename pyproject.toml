@@ -1,0 +1,49 @@
+[project]
+name = "podpocket"
+version = "0.0.0"
+description = "Self-hosted server for the Pod Pocket podcast app"
+requires-python = ">=3.13"
+dependencies = [
+    "aiosqlite>=0.22",
+    "alembic>=1.20",
+    "fastapi>=0.143",
+    "feedparser>=6.0.14",
+    "httpx>=0.28",
+    "pillow>=12.3",
+    "pydantic-settings>=2.15",
+    "python-multipart>=0.0.32",
+    "sqlalchemy[asyncio]>=2.1",
+    "uvicorn[standard]>=0.54",
+]
+
+[project.scripts]
+podpocket = "podpocket.cli:main"
+
+[dependency-groups]
+dev = [
+    "asgi-lifespan>=2.1",
+    "pytest>=8",
+    "pytest-asyncio>=1.4",
+    "respx>=0.23",
+    "ruff>=0.17",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+extend-exclude = ["src/podpocket/migrations/versions"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["E501"]
