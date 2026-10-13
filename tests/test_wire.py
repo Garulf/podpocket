@@ -101,6 +101,11 @@ async def test_json_integers_beyond_int64_are_a_422(echo):
     assert (await echo.post("/json", json={"value": 2**63})).status_code == 422
 
 
+async def test_json_integers_below_int64_are_a_422(echo):
+    assert (await echo.post("/json", json={"value": -(2**63)})).status_code == 200
+    assert (await echo.post("/json", json={"value": -(2**63) - 1})).status_code == 422
+
+
 @pytest.mark.parametrize(
     ("content_type", "expected"),
     [
@@ -158,6 +163,18 @@ async def test_a_streamed_oversized_body_is_refused(capped, path):
     )
 
     assert response.status_code == 413
+
+
+async def test_an_absurd_content_length_is_refused_not_a_crash(capped):
+    response = await capped.post("/raw", content=b"x", headers={"Content-Length": "9" * 5000})
+
+    assert response.status_code == 413
+
+
+async def test_an_unparseable_content_length_is_ignored(capped):
+    response = await capped.post("/model", json={"value": 1}, headers={"Content-Length": "abc"})
+
+    assert response.status_code != 500
 
 
 async def test_the_app_caps_every_request_body(client):

@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 from sqlalchemy import select
 
@@ -51,6 +53,21 @@ async def test_stamps_strictly_increase_even_when_the_clock_does_not(services, a
     second = await write(services, alice.uuid, 5, (EPISODE, "e", "starred", 2))
 
     assert (first, second) == (before + 1, before + 2)
+
+
+async def test_concurrent_writers_get_distinct_increasing_stamps(services, alice):
+    writers = 20
+
+    async def record_one(index):
+        return await write(services, alice.uuid, 1, (EPISODE, f"e{index}", "starred", 1))
+
+    cursors = await asyncio.gather(*(record_one(index) for index in range(writers)))
+
+    assert len(set(cursors)) == writers
+    assert await last_change(services, alice.uuid) == max(cursors)
+    async with services.sessionmaker() as session:
+        stamps = (await session.scalars(select(ChangeLog.server_ms))).all()
+    assert sorted(stamps) == sorted(cursors)
 
 
 async def test_writer_without_changes_keeps_the_cursor(services, alice):

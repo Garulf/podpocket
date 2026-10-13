@@ -13,6 +13,7 @@ PROTOBUF_MEDIA_TYPE = "application/octet-stream"
 PROTOBUF_MEDIA_TYPES = frozenset({PROTOBUF_MEDIA_TYPE, "application/x-protobuf"})
 MAX_REQUEST_BYTES = 32 * 1024 * 1024
 TOO_LARGE = "request body too large"
+MAX_DECLARED_DIGITS = 19
 
 Int64 = Annotated[int, Field(ge=-INT64_MAX - 1, le=INT64_MAX)]
 
@@ -69,5 +70,7 @@ class BodySizeLimit:
 def _declared_length(scope: Scope) -> int:
     for name, value in scope["headers"]:
         if name == b"content-length":
-            return int(value) if value.isdigit() else 0
+            if not value.isdigit():
+                return 0
+            return int(value) if len(value) <= MAX_DECLARED_DIGITS else INT64_MAX
     return 0
