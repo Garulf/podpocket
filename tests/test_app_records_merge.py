@@ -301,8 +301,8 @@ async def test_a_far_future_bookmark_clock_cannot_make_a_field_unbeatable(servic
     stored = await load(services, Bookmark, alice.uuid, "b1")
     assert stored.title_modified == NOW + MAX_CLOCK_SKEW_MS
 
-    later = NOW + 2 * MAX_CLOCK_SKEW_MS
-    honest = unwrap(bookmark_upload("b1", title="Honest", title_modified=later - 1000))
+    later = NOW + 1000
+    honest = unwrap(bookmark_upload("b1", title="Honest", title_modified=later))
     await merge(services, alice.uuid, apply_bookmark_records, [honest], now=later)
 
     assert (await load(services, Bookmark, alice.uuid, "b1")).title == "Honest"

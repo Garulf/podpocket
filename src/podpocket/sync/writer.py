@@ -17,7 +17,7 @@ FOLDER = "folder"
 PLAYLIST = "playlist"
 BOOKMARK = "bookmark"
 KEY_CHUNK = 500
-MAX_CLOCK_SKEW_MS = 3_600_000
+MAX_CLOCK_SKEW_MS = 0
 
 
 def wins(new_ms: int, new_value: object, old_ms: int | None, old_value: object) -> bool:

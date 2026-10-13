@@ -1,7 +1,7 @@
+from collections import OrderedDict
 from collections.abc import Iterable
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
-from itertools import islice
 from typing import Any
 
 from sqlalchemy import Row, delete, select
@@ -16,7 +16,6 @@ PLAY_LAST = 3
 REMOVE = 4
 REPLACE = 5
 SINGLE_EPISODE_ACTIONS = frozenset({PLAY_NOW, PLAY_NEXT, PLAY_LAST, REMOVE})
-MAX_CHANGES = 1000
 MAX_QUEUE = 10_000
 EARLIEST_PUBLISHED = datetime(1970, 1, 1, tzinfo=UTC)
 
@@ -47,28 +46,34 @@ class QueueState:
 def apply_changes(
     queue: list[QueueEntry], changes: Iterable[QueueChange], replaced_ms: int
 ) -> tuple[list[QueueEntry], int]:
-    order = list(queue)
+    order = OrderedDict((entry.uuid, entry) for entry in queue)
     for change in sorted(changes, key=lambda change: change.modified_ms):
         if change.action == REPLACE:
             if change.modified_ms >= replaced_ms:
-                order = _deduplicated(change.entries)
+                order = OrderedDict((entry.uuid, entry) for entry in _deduplicated(change.entries))
                 replaced_ms = change.modified_ms
             continue
         if change.action not in SINGLE_EPISODE_ACTIONS or change.entry is None:
             continue
-        if not change.entry.uuid:
+        if not change.entry.uuid or change.modified_ms < replaced_ms:
             continue
-        previous = next((entry for entry in order if entry.uuid == change.entry.uuid), None)
-        order = [entry for entry in order if entry.uuid != change.entry.uuid]
-        entry = _with_known_metadata(change.entry, previous)
-        if change.action == PLAY_NOW:
-            order.insert(0, entry)
-        elif change.action == PLAY_NEXT:
-            order.insert(min(1, len(order)), entry)
-        elif change.action == PLAY_LAST:
-            order.append(entry)
-        del order[MAX_QUEUE:]
-    return order, replaced_ms
+        _apply_single(order, change.action, change.entry)
+        while len(order) > MAX_QUEUE:
+            order.popitem()
+    return list(order.values()), replaced_ms
+
+
+def _apply_single(order: OrderedDict[str, QueueEntry], action: int, new: QueueEntry) -> None:
+    entry = _with_known_metadata(new, order.pop(new.uuid, None))
+    if action == REMOVE:
+        return
+    head = next(iter(order), None)
+    order[entry.uuid] = entry
+    if action == PLAY_LAST:
+        return
+    order.move_to_end(entry.uuid, last=False)
+    if action == PLAY_NEXT and head is not None:
+        order.move_to_end(head, last=False)
 
 
 def _deduplicated(entries: Iterable[QueueEntry]) -> list[QueueEntry]:
@@ -120,7 +125,7 @@ async def sync_up_next(
     session: AsyncSession, user_uuid: str, changes: Iterable[QueueChange], now_ms: int
 ) -> QueueState:
     user = await lock_user(session, user_uuid)
-    accepted = [_bounded(change, now_ms) for change in islice(changes, MAX_CHANGES)]
+    accepted = [_bounded(change, now_ms) for change in changes]
     rows = await session.execute(
         select(
             UpNextItem.episode_uuid,
@@ -150,12 +155,11 @@ async def sync_up_next(
             for position, entry in enumerate(updated)
         )
         user.up_next_modified_ms = max(now_ms, user.up_next_modified_ms + 1)
-    return QueueState(user.up_next_modified_ms, await _with_catalog_metadata(session, updated))
+    return QueueState(user.up_next_modified_ms, updated)
 
 
-async def _with_catalog_metadata(
-    session: AsyncSession, entries: list[QueueEntry]
-) -> list[QueueEntry]:
+async def with_catalog_metadata(session: AsyncSession, state: QueueState) -> QueueState:
+    entries = state.entries
     incomplete = sorted(
         {
             entry.uuid
@@ -176,7 +180,9 @@ async def _with_catalog_metadata(
             ).where(Episode.uuid.in_(chunk))
         )
         episodes.update((row.uuid, row) for row in rows)
-    return [_filled(entry, episodes.get(entry.uuid)) for entry in entries]
+    return QueueState(
+        state.server_modified, [_filled(entry, episodes.get(entry.uuid)) for entry in entries]
+    )
 
 
 def _filled(entry: QueueEntry, episode: Row[Any] | None) -> QueueEntry:
@@ -187,6 +193,5 @@ def _filled(entry: QueueEntry, episode: Row[Any] | None) -> QueueEntry:
         podcast_uuid=entry.podcast_uuid or episode.podcast_uuid,
         title=entry.title or episode.title,
         url=entry.url or episode.enclosure_url,
-        published=entry.published
-        or _plausible(QueueEntry("", published=episode.published)).published,
+        published=entry.published or _plausible_date(episode.published),
     )

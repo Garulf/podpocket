@@ -8,8 +8,10 @@ from podpocket.models import ChangeLog, UserEpisodeState
 from podpocket.sync.episodes import EpisodeChange, FieldUpdate, apply_episode_changes
 from podpocket.sync.writer import APP_SOURCE, ChangeWriter
 
+ONE_TRILLION_MS = 1_000_000_000_000
 
-async def apply(services, user_uuid, *changes, source=APP_SOURCE, now=1):
+
+async def apply(services, user_uuid, *changes, source=APP_SOURCE, now=ONE_TRILLION_MS):
     async with services.sessionmaker() as session:
         writer = await ChangeWriter.begin(session, user_uuid, source=source, now_ms=now)
         changed = await apply_episode_changes(writer, changes)
@@ -143,17 +145,17 @@ async def test_a_far_future_client_clock_cannot_make_a_field_unbeatable(services
         EpisodeChange("e", "p", played_up_to=FieldUpdate(100, now + ten_years)),
         now=now,
     )
-    assert (await load(services, alice.uuid, "e")).played_up_to_modified == now + 3_600_000
+    assert (await load(services, alice.uuid, "e")).played_up_to_modified == now
 
     await apply(
         services,
         alice.uuid,
-        EpisodeChange("e", "p", played_up_to=FieldUpdate(200, now + 7_200_000)),
-        now=now + 7_200_000,
+        EpisodeChange("e", "p", played_up_to=FieldUpdate(200, now + 1000)),
+        now=now + 1000,
     )
 
     state = await load(services, alice.uuid, "e")
-    assert (state.played_up_to, state.played_up_to_modified) == (200, now + 7_200_000)
+    assert (state.played_up_to, state.played_up_to_modified) == (200, now + 1000)
 
 
 async def test_merge_is_independent_of_arrival_order(services, alice):

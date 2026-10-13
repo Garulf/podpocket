@@ -1,14 +1,14 @@
+import time
 from datetime import UTC, datetime
 
 from google.protobuf.timestamp_pb2 import Timestamp
 
 from podpocket.catalog import list_episodes
-from podpocket.models import User
+from podpocket.pcapi import upnext as upnext_router
 from podpocket.protocol import sync_api_pb2 as pb
 from podpocket.protocol import to_timestamp
 from podpocket.sync import upnext
 from podpocket.sync.upnext import (
-    MAX_CHANGES,
     MAX_QUEUE,
     PLAY_LAST,
     PLAY_NEXT,
@@ -19,7 +19,7 @@ from podpocket.sync.upnext import (
     QueueEntry,
     apply_changes,
 )
-from podpocket.sync.writer import MAX_CLOCK_SKEW_MS, UserGone
+from podpocket.sync.writer import UserGone
 from podpocket.timefmt import now_ms
 from tests.api import PROTOBUF, post_proto
 from tests.factories import item, rss
@@ -264,12 +264,59 @@ async def test_unknown_actions_change_nothing(client, alice_auth):
     assert response.json() == {"serverModified": 0, "episodes": []}
 
 
-async def test_changes_beyond_the_cap_are_not_processed(client, alice_auth):
-    changes = [add_last(f"e{index}", index, podcast="p1") for index in range(MAX_CHANGES + 5)]
+async def test_every_change_in_a_large_request_is_applied(client, alice_auth):
+    changes = [add_last(f"e{index}", index, podcast="p1") for index in range(1005)]
 
     response = await client.post(UP_NEXT, json=up_next_body(*changes), headers=alice_auth)
 
-    assert len(response.json()["episodes"]) == MAX_CHANGES
+    assert len(response.json()["episodes"]) == 1005
+
+
+async def test_changes_apply_in_modified_order_whatever_the_request_order(client, alice_auth):
+    changes = [
+        add_last("c", 3000, podcast="p1"),
+        add_last("a", 1000, podcast="p1"),
+        add_last("b", 2000, podcast="p1"),
+    ]
+
+    response = await client.post(UP_NEXT, json=up_next_body(*changes), headers=alice_auth)
+
+    assert [episode["uuid"] for episode in response.json()["episodes"]] == ["a", "b", "c"]
+
+
+def test_a_flood_of_changes_on_a_full_queue_is_applied_quickly():
+    full = [QueueEntry(f"q{index}") for index in range(MAX_QUEUE)]
+    flood = [QueueChange(PLAY_LAST, index, QueueEntry(f"f{index}")) for index in range(50_000)]
+
+    started = time.perf_counter()
+    queue, _ = apply_changes(full, flood, 0)
+
+    assert time.perf_counter() - started < 5
+    assert len(queue) == MAX_QUEUE
+
+
+def test_a_single_episode_change_older_than_the_last_replace_is_ignored():
+    queue, replaced = apply_changes([A], [QueueChange(PLAY_LAST, 5, B)], 10)
+
+    assert (uuids(queue), replaced) == (["a"], 10)
+
+
+async def test_a_stale_add_does_not_survive_a_newer_replace(client, alice_auth):
+    await client.post(UP_NEXT, json=up_next_body(replace_all(2000, "a")), headers=alice_auth)
+
+    response = await client.post(
+        UP_NEXT, json=up_next_body(add_last("b", 1000, podcast="p1")), headers=alice_auth
+    )
+
+    assert [episode["uuid"] for episode in response.json()["episodes"]] == ["a"]
+
+
+def test_play_now_and_play_next_on_a_full_queue_drop_the_tail():
+    full = [QueueEntry(f"q{index}") for index in range(MAX_QUEUE)]
+
+    queue, _ = apply_changes(full, [QueueChange(PLAY_NOW, 1, A), QueueChange(PLAY_NEXT, 2, B)], 0)
+
+    assert (uuids(queue)[:3], len(queue)) == (["a", "b", "q0"], MAX_QUEUE)
 
 
 def test_replace_is_capped_to_the_queue_limit():
@@ -289,15 +336,29 @@ def test_appending_to_a_full_queue_drops_the_tail():
     assert "a" not in uuids(queue)
 
 
-async def test_far_future_modified_times_are_clamped(client, services, alice, alice_auth):
-    body = up_next_body(replace_all(2**62, "e1"))
+async def test_a_far_future_replace_does_not_block_an_honest_one(client, alice_auth):
+    await client.post(UP_NEXT, json=up_next_body(replace_all(2**62, "bogus")), headers=alice_auth)
 
-    response = await client.post(UP_NEXT, json=body, headers=alice_auth)
+    response = await client.post(
+        UP_NEXT, json=up_next_body(replace_all(now_ms(), "honest")), headers=alice_auth
+    )
 
-    assert response.status_code == 200
-    async with services.sessionmaker() as session:
-        user = await session.get(User, alice.uuid)
-    assert user.up_next_replaced_ms <= now_ms() + MAX_CLOCK_SKEW_MS
+    assert [episode["uuid"] for episode in response.json()["episodes"]] == ["honest"]
+
+
+async def test_catalog_metadata_is_read_after_the_lock_is_released(client, alice_auth, monkeypatch):
+    real_lookup = upnext_router.with_catalog_metadata
+    in_transaction = []
+
+    async def spy(session, state):
+        in_transaction.append(session.in_transaction())
+        return await real_lookup(session, state)
+
+    monkeypatch.setattr(upnext_router, "with_catalog_metadata", spy)
+
+    await client.post(UP_NEXT, json=up_next_body(add_last("e1", 1000)), headers=alice_auth)
+
+    assert in_transaction == [False]
 
 
 async def test_a_pre_1970_published_date_is_ignored(client, alice_auth):

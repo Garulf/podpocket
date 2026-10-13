@@ -10,7 +10,13 @@ from podpocket.pcapi.wire import Int64, is_protobuf, protobuf_response, read_jso
 from podpocket.protocol import from_timestamp, to_timestamp
 from podpocket.protocol import sync_api_pb2 as pb
 from podpocket.services import Services, get_services
-from podpocket.sync.upnext import QueueChange, QueueEntry, QueueState, sync_up_next
+from podpocket.sync.upnext import (
+    QueueChange,
+    QueueEntry,
+    QueueState,
+    sync_up_next,
+    with_catalog_metadata,
+)
 from podpocket.timefmt import iso_z, now_ms, parse_iso
 
 router = APIRouter(prefix="/api")
@@ -62,7 +68,7 @@ async def _sync(services: Services, user_uuid: str, changes: Iterable[QueueChang
     async with services.sessionmaker() as session:
         state = await sync_up_next(session, user_uuid, changes, now_ms())
         await session.commit()
-    return state
+        return await with_catalog_metadata(session, state)
 
 
 def _json_entry(item: JsonChange | JsonEpisode) -> QueueEntry:
