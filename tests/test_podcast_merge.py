@@ -1,3 +1,4 @@
+import pytest
 from google.protobuf.timestamp_pb2 import Timestamp
 from google.protobuf.wrappers_pb2 import BoolValue
 from sqlalchemy import select
@@ -160,3 +161,60 @@ def test_podcast_folder_entry_has_date_added():
 
     assert (entry.folder_uuid, entry.name) == ("f1", "News")
     assert entry.date_added == to_timestamp(CREATED)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("sort_position", 2**31),
+        ("episodes_sort_order", -(2**31) - 1),
+        ("auto_start_from", 2**63),
+        ("auto_skip_last", 2**31),
+        ("sort_position", 1.5),
+        ("auto_start_from", "30"),
+        ("auto_skip_last", True),
+        ("subscribed", 1),
+        ("folder_uuid", 7),
+        ("date_added", "today"),
+    ],
+)
+async def test_invalid_podcast_values_are_dropped(services, alice, field, value):
+    change = PodcastChange("p1", **{field: value})
+
+    assert await merge(services, alice.uuid, apply_podcast_changes, [change]) == set()
+    assert await load(services, Subscription, alice.uuid, "p1") is None
+
+
+async def test_valid_fields_survive_an_invalid_sibling(services, alice):
+    change = PodcastChange("p1", subscribed=True, sort_position=2**31, auto_skip_last=15)
+
+    await merge(services, alice.uuid, apply_podcast_changes, [change])
+
+    stored = await load(services, Subscription, alice.uuid, "p1")
+    assert (stored.subscribed, stored.sort_position, stored.auto_skip_last) == (True, None, 15)
+
+
+async def test_one_users_change_leaves_another_users_subscription_alone(services, alice, bob):
+    await merge(
+        services, bob.uuid, apply_podcast_changes, [PodcastChange("p1", True, "bobs-folder")]
+    )
+
+    await merge(
+        services, alice.uuid, apply_podcast_changes, [PodcastChange("p1", False, "f1")], now=NOW
+    )
+
+    untouched = await load(services, Subscription, bob.uuid, "p1")
+    assert (untouched.subscribed, untouched.folder_uuid) == (True, "bobs-folder")
+    assert (await load(services, Subscription, alice.uuid, "p1")).folder_uuid == "f1"
+
+
+async def test_one_users_folder_upload_leaves_another_users_folder_alone(services, alice, bob):
+    await merge(
+        services, bob.uuid, apply_folder_records, [unwrap(folder_upload("f1", name="Bobs"))]
+    )
+
+    await merge(
+        services, alice.uuid, apply_folder_records, [unwrap(folder_upload("f1", name="Alices"))]
+    )
+
+    assert (await load(services, Folder, bob.uuid, "f1")).name == "Bobs"

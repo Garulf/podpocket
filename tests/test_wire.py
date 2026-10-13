@@ -172,7 +172,14 @@ async def test_an_absurd_content_length_is_refused_not_a_crash(capped):
 
 
 async def test_an_unparseable_content_length_is_ignored(capped):
-    response = await capped.post("/model", json={"value": 1}, headers={"Content-Length": "abc"})
+    response = await capped.post("/raw", content=b"x", headers={"Content-Length": "abc"})
+
+    assert response.status_code == 200
+    assert response.json() == {"size": 1}
+
+
+async def test_an_unparseable_content_length_does_not_excuse_an_oversized_body(capped):
+    response = await capped.post("/raw", content=b"x" * 11, headers={"Content-Length": "abc"})
 
     assert response.status_code == 413
 

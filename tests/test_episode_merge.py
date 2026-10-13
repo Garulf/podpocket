@@ -6,10 +6,10 @@ from sqlalchemy import select
 
 from podpocket.models import ChangeLog, UserEpisodeState
 from podpocket.sync.episodes import EpisodeChange, FieldUpdate, apply_episode_changes
-from podpocket.sync.writer import ChangeWriter
+from podpocket.sync.writer import APP_SOURCE, ChangeWriter
 
 
-async def apply(services, user_uuid, *changes, source="app", now=1):
+async def apply(services, user_uuid, *changes, source=APP_SOURCE, now=1):
     async with services.sessionmaker() as session:
         writer = await ChangeWriter.begin(session, user_uuid, source=source, now_ms=now)
         changed = await apply_episode_changes(writer, changes)

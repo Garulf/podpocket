@@ -3,20 +3,28 @@ from collections.abc import Iterable
 from podpocket.models import Folder
 from podpocket.protocol import from_timestamp, to_timestamp
 from podpocket.protocol import sync_api_pb2 as pb
-from podpocket.sync.writer import FOLDER, ChangeWriter
+from podpocket.sync.writer import FOLDER, ChangeWriter, load_by_keys
 from podpocket.timefmt import from_epoch_ms
 
 
 async def apply_folder_records(
     writer: ChangeWriter, records: Iterable[pb.SyncUserFolder]
 ) -> set[str]:
-    folders: dict[str, Folder] = {}
+    batch = [record for record in records if record.folder_uuid]
+    folders: dict[str, Folder] = {
+        folder.folder_uuid: folder
+        for folder in await load_by_keys(
+            writer.session,
+            Folder,
+            Folder.folder_uuid,
+            writer.user_uuid,
+            (record.folder_uuid for record in batch),
+        )
+    }
     changed: set[str] = set()
-    for record in records:
+    for record in batch:
         uuid = record.folder_uuid
-        if not uuid:
-            continue
-        folder = folders.get(uuid) or await writer.session.get(Folder, (writer.user_uuid, uuid))
+        folder = folders.get(uuid)
         if folder is None:
             folder = Folder(
                 user_uuid=writer.user_uuid,
@@ -24,7 +32,7 @@ async def apply_folder_records(
                 date_added=from_epoch_ms(writer.now_ms),
             )
             writer.session.add(folder)
-        folders[uuid] = folder
+            folders[uuid] = folder
         values: dict[str, object] = {
             "name": record.name,
             "color": record.color,

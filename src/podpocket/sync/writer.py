@@ -8,6 +8,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from podpocket.models import ChangeLog, User
 
 INT64_MAX = 2**63 - 1
+INT64_MIN = -(2**63)
+INT32_MAX = 2**31 - 1
+INT32_MIN = -(2**31)
 PODCAST = "podcast"
 EPISODE = "episode"
 FOLDER = "folder"

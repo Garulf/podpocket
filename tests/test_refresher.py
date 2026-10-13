@@ -505,3 +505,11 @@ async def test_a_failing_subscribed_feed_still_backs_off(respx_mock, refresher, 
     assert route.call_count == 1
     clock.advance(timedelta(minutes=61))
     assert await refresher.refresh_due() == 1
+
+
+async def test_a_subscription_without_a_podcast_row_is_not_refreshed(
+    respx_mock, refresher, services
+):
+    await add_subscriber(services, "uuid-from-the-real-service")
+
+    assert await refresher.refresh_due() == 0

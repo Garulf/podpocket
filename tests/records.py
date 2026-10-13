@@ -8,7 +8,7 @@ from google.protobuf.wrappers_pb2 import BoolValue, Int32Value, Int64Value, Stri
 from podpocket.protocol import sync_api_pb2 as pb
 from podpocket.protocol import to_timestamp
 from podpocket.sync.podcasts import HOME_FOLDER
-from podpocket.sync.writer import ChangeWriter
+from podpocket.sync.writer import APP_SOURCE, ChangeWriter
 from tests.api import post_proto
 
 SYNC_UPDATE = "/api/user/sync/update"
@@ -164,7 +164,7 @@ async def merge(
     now: int = 1_000_000,
 ) -> set[str]:
     async with services.sessionmaker() as session:
-        writer = await ChangeWriter.begin(session, user_uuid, source="app", now_ms=now)
+        writer = await ChangeWriter.begin(session, user_uuid, source=APP_SOURCE, now_ms=now)
         changed = await apply(writer, list(items))
         await session.commit()
     return changed
