@@ -1,7 +1,9 @@
 import asyncio
+import sqlite3
 from types import SimpleNamespace
 
 import pytest
+from alembic import command
 from alembic.autogenerate import compare_metadata
 from alembic.migration import MigrationContext
 from asgi_lifespan import LifespanManager
@@ -11,7 +13,7 @@ from podpocket.app import build_http_client, create_app
 from podpocket.db import create_engine
 from podpocket.feeds.fetch import GuardedNetworkBackend
 from podpocket.feeds.refresher import FeedRefresher
-from podpocket.migrate import upgrade_to_head
+from podpocket.migrate import alembic_config, upgrade_to_head
 from podpocket.models import Base
 
 
@@ -36,6 +38,37 @@ def test_migrations_match_models(tmp_path):
         return drift
 
     assert asyncio.run(schema_drift()) == []
+
+
+V010_REVISION = "abc09288ab95"
+ACCOUNT_TABLES = {"users", "refresh_tokens", "refresh_token_hashes", "change_log", "history"}
+
+
+def test_upgrading_a_populated_v010_database_keeps_the_catalog(tmp_path):
+    path = tmp_path / "v010.db"
+    url = f"sqlite+aiosqlite:///{path}"
+    command.upgrade(alembic_config(url), V010_REVISION)
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            "INSERT INTO podcasts (uuid, feed_url, title, author, description, description_html,"
+            " category, language, show_type, explicit, failure_count)"
+            " VALUES ('p1', 'https://feed.test/rss', 'Show', 'Ann', '', '', '', 'en', 'episodic', 0, 0)"
+        )
+        connection.execute(
+            "INSERT INTO episodes (uuid, podcast_uuid, title, enclosure_url, file_type, file_size,"
+            " duration, published, first_seen_at, episode_type, show_notes, transcripts)"
+            " VALUES ('e1', 'p1', 'One', 'https://feed.test/1.mp3', 'audio/mpeg', 10, 60.0,"
+            " '2026-01-01 00:00:00', '2026-01-02 00:00:00', 'full', '', '[]')"
+        )
+    upgrade_to_head(url)
+
+    with sqlite3.connect(path) as connection:
+        podcasts = connection.execute("SELECT uuid, title FROM podcasts").fetchall()
+        episodes = connection.execute("SELECT uuid, podcast_uuid, title FROM episodes").fetchall()
+        tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master")}
+    assert podcasts == [("p1", "Show")]
+    assert episodes == [("e1", "p1", "One")]
+    assert tables >= ACCOUNT_TABLES
 
 
 async def test_file_databases_get_a_pool_sized_for_concurrent_refreshes(tmp_path):
