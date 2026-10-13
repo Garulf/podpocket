@@ -38,5 +38,5 @@ async def update_episode(
     async with services.sessionmaker() as session:
         writer = await ChangeWriter.begin(session, user.uuid, source=APP_SOURCE, now_ms=now)
         await apply_episode_changes(writer, [change])
-        await session.commit()
+        await writer.commit()
     return Response(status_code=204)

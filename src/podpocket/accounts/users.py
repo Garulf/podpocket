@@ -89,12 +89,14 @@ async def authenticate(sessionmaker: Sessionmaker, login: str, password: str) ->
 async def _upgrade_hash(sessionmaker: Sessionmaker, user: User, password: str) -> None:
     upgraded = await hash_password(password)
     async with sessionmaker() as session:
-        await session.execute(
+        result = await session.execute(
             update(User)
             .where(User.uuid == user.uuid, User.password_hash == user.password_hash)
             .values(password_hash=upgraded)
         )
         await session.commit()
+    if result.rowcount:
+        user.password_hash = upgraded
 
 
 def _is_utf8_encodable(value: str) -> bool:

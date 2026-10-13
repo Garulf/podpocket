@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from podpocket.directory.itunes import DirectoryPodcast
 from podpocket.ids import normalize_feed_url, podcast_uuid
 from podpocket.models import Episode, Podcast, PodcastAlias
+from podpocket.sync.writer import chunks
 
 
 async def find_podcast_by_url(session: AsyncSession, normalized_url: str) -> Podcast | None:
@@ -19,6 +20,24 @@ async def find_podcast_by_url(session: AsyncSession, normalized_url: str) -> Pod
         .join(PodcastAlias, PodcastAlias.podcast_uuid == Podcast.uuid)
         .where(PodcastAlias.url == normalized_url)
     )
+
+
+async def resolve_podcast_uuids(
+    session: AsyncSession, normalized_urls: Iterable[str]
+) -> dict[str, str]:
+    wanted = sorted(set(normalized_urls))
+    resolved: dict[str, str] = {}
+    for chunk in chunks(wanted):
+        rows = await session.execute(
+            select(Podcast.feed_url, Podcast.uuid).where(Podcast.feed_url.in_(chunk))
+        )
+        resolved.update((url, uuid) for url, uuid in rows)
+    for chunk in chunks([url for url in wanted if url not in resolved]):
+        rows = await session.execute(
+            select(PodcastAlias.url, PodcastAlias.podcast_uuid).where(PodcastAlias.url.in_(chunk))
+        )
+        resolved.update((url, uuid) for url, uuid in rows)
+    return resolved
 
 
 def newest_first(podcast_uuid: str):

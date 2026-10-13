@@ -15,7 +15,7 @@ async def apply(services, user_uuid, *changes, source=APP_SOURCE, now=ONE_TRILLI
     async with services.sessionmaker() as session:
         writer = await ChangeWriter.begin(session, user_uuid, source=source, now_ms=now)
         changed = await apply_episode_changes(writer, changes)
-        await session.commit()
+        await writer.commit()
     return changed
 
 

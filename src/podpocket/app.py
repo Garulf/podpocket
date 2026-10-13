@@ -12,6 +12,7 @@ from podpocket.accounts.dependencies import CHALLENGE
 from podpocket.config import USER_AGENT, Settings
 from podpocket.db import create_engine, create_sessionmaker
 from podpocket.feeds.fetch import guarded_transport
+from podpocket.gpodder.router import router as gpodder_router
 from podpocket.migrate import upgrade_to_head
 from podpocket.pcapi import api, cache, refresh, search, static
 from podpocket.pcapi.wire import MAX_REQUEST_BYTES, BodySizeLimit
@@ -89,6 +90,7 @@ def create_app(settings: Settings) -> FastAPI:
     app.include_router(refresh.router)
     app.include_router(static.router)
     app.include_router(api.router)
+    app.include_router(gpodder_router)
     return app
 
 

@@ -18,6 +18,7 @@ class SlowHasher(PasswordHasher):
         super().__init__(time_cost=1, memory_cost=8, parallelism=1)
         self._engine = engine
         self._delay = delay
+        self.release = threading.Event()
         self._lock = threading.Lock()
         self.active = 0
         self.verifications = 0
@@ -30,32 +31,38 @@ class SlowHasher(PasswordHasher):
             self.verifications += 1
             self.peak_active = max(self.peak_active, self.active)
             self.peak_connections = max(self.peak_connections, self._engine.pool.checkedout())
-        time.sleep(self._delay)
+        if self._delay is None:
+            assert self.release.wait(timeout=30), "the test never released the hasher"
+        else:
+            time.sleep(self._delay)
         with self._lock:
             self.active -= 1
         return super().verify(hash, password)
 
 
 @pytest.fixture
-def slow_hasher(monkeypatch, services):
+def slow_hasher(monkeypatch, services, request):
     def install(delay, *, concurrency, wait=5.0):
+        """delay is seconds to sleep, or None to hold every hash until hasher.release is set."""
         hasher = SlowHasher(services.sessionmaker.kw["bind"].sync_engine, delay)
         monkeypatch.setattr(passwords, "HASHER", hasher)
         monkeypatch.setattr(throttle, "LOGIN_WAIT_SECONDS", wait)
         passwords.configure(concurrency)
+        request.addfinalizer(hasher.release.set)
         return hasher
 
     return install
 
 
+async def until(condition, timeout=10.0):
+    deadline = time.monotonic() + timeout
+    while not condition():
+        assert time.monotonic() < deadline, "timed out waiting for the condition"
+        await asyncio.sleep(0.01)
+
+
 def credentials(login, password="wrong"):
     return {"email": login, "password": password, "scope": "mobile"}
-
-
-async def timed_login(client, login, password="wrong"):
-    started = time.monotonic()
-    response = await client.post(LOGIN, json=credentials(login, password))
-    return response, time.monotonic() - started
 
 
 async def test_no_database_connection_is_held_while_a_password_is_hashed(
@@ -84,48 +91,65 @@ async def test_password_hashing_never_exceeds_the_configured_concurrency(
 
 
 async def test_a_login_over_capacity_is_refused_straight_away(client, alice, slow_hasher):
-    slow_hasher(0.5, concurrency=1, wait=0.05)
+    hasher = slow_hasher(None, concurrency=1, wait=0.05)
 
-    results = await asyncio.gather(*(timed_login(client, f"nobody{n}") for n in range(3)))
+    logins = [
+        asyncio.create_task(client.post(LOGIN, json=credentials(f"nobody{n}"))) for n in range(3)
+    ]
+    await until(lambda: sum(login.done() for login in logins) == 2)
+    await until(lambda: hasher.active == 1)
 
-    refused = [(response, took) for response, took in results if response.status_code == 429]
-    assert len(refused) == 2
-    for response, took in refused:
-        assert took < 0.3
+    assert hasher.active == 1
+    refused = [login.result() for login in logins if login.done()]
+    assert [response.status_code for response in refused] == [429, 429]
+    for response in refused:
         assert response.json()["errorMessageId"] == "login_server_busy"
         assert response.json()["errorMessage"]
-    assert sorted(response.status_code for response, _ in results) == [401, 429, 429]
+    hasher.release.set()
+    assert sorted(response.status_code for response in await asyncio.gather(*logins)) == [
+        401,
+        429,
+        429,
+    ]
 
 
 async def test_a_login_flood_does_not_delay_a_signed_in_user(
     client, alice, alice_auth, slow_hasher
 ):
-    slow_hasher(0.5, concurrency=2, wait=0.05)
-    flood = [asyncio.create_task(timed_login(client, "alice")) for _ in range(60)]
-    await asyncio.sleep(0.1)
+    hasher = slow_hasher(None, concurrency=2, wait=0.05)
+    flood = [asyncio.create_task(client.post(LOGIN, json=credentials("alice"))) for _ in range(60)]
+    await until(lambda: hasher.active == 2 and sum(login.done() for login in flood) == 58)
 
-    started = time.monotonic()
-    response = await client.get(STATUS, headers=alice_auth)
-    took = time.monotonic() - started
-    await asyncio.gather(*flood)
+    response = await asyncio.wait_for(client.get(STATUS, headers=alice_auth), timeout=10)
 
     assert response.status_code == 200
-    assert took < 0.3
+    assert hasher.active == 2
+    hasher.release.set()
+    await asyncio.gather(*flood)
 
 
 async def test_refreshing_a_token_is_never_limited(client, alice, slow_hasher):
-    slow_hasher(0.5, concurrency=1, wait=0.05)
+    hasher = slow_hasher(None, concurrency=1, wait=0.05)
+    hasher.release.set()
     login = (await client.post(LOGIN, json=credentials("alice", PASSWORD))).json()
-    flood = [asyncio.create_task(timed_login(client, f"nobody{n}")) for n in range(5)]
-    await asyncio.sleep(0.1)
+    hasher.release.clear()
+    flood = [
+        asyncio.create_task(client.post(LOGIN, json=credentials(f"nobody{n}"))) for n in range(5)
+    ]
+    await until(lambda: hasher.active == 1 and sum(task.done() for task in flood) == 4)
 
-    response = await client.post(
-        "/api/user/token",
-        json={"grant_type": "refresh_token", "refresh_token": login["refreshToken"]},
+    response = await asyncio.wait_for(
+        client.post(
+            "/api/user/token",
+            json={"grant_type": "refresh_token", "refresh_token": login["refreshToken"]},
+        ),
+        timeout=10,
     )
-    await asyncio.gather(*flood)
 
     assert response.status_code == 200
+    assert hasher.active == 1
+    hasher.release.set()
+    await asyncio.gather(*flood)
 
 
 async def test_five_failures_lock_a_username_even_for_the_right_password(client, alice, bob):

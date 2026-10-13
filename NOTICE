@@ -1,0 +1,9 @@
+Pod Pocket server
+
+tests/ma_gpodder/client.py is copied from Music Assistant
+(https://github.com/music-assistant/server), file
+music_assistant/providers/gpodder/client.py at commit
+09e6bfb868b6a55e0f93afbb3356205948420d54. It is licensed under the
+Apache License 2.0; a copy is in tests/ma_gpodder/LICENSE. Only its
+imports were changed, as its header describes. It is used by the tests
+only and is not part of the server package.

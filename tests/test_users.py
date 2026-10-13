@@ -140,6 +140,18 @@ async def test_authenticate_upgrades_an_outdated_hash(services, alice, monkeypat
     assert await authenticate(services.sessionmaker, "alice", PASSWORD) is not None
 
 
+async def test_authenticate_returns_the_upgraded_hash(services, alice, monkeypatch):
+    monkeypatch.setattr(
+        passwords, "HASHER", PasswordHasher(time_cost=2, memory_cost=16, parallelism=1)
+    )
+
+    user = await authenticate(services.sessionmaker, "alice", PASSWORD)
+
+    async with services.sessionmaker() as session:
+        stored = await session.scalar(select(User.password_hash).where(User.uuid == alice.uuid))
+    assert user.password_hash == stored != alice.password_hash
+
+
 async def test_authenticate_upgrade_keeps_refresh_tokens(services, alice, monkeypatch):
     await add_refresh_token(services, alice, "a")
     monkeypatch.setattr(

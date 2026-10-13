@@ -20,7 +20,10 @@ FIELDS = (
     "starred",
     "deselected_chapters",
 )
-PLAYING_STATUSES = frozenset({1, 2, 3})
+UNPLAYED = 1
+IN_PROGRESS = 2
+COMPLETED = 3
+PLAYING_STATUSES = frozenset({UNPLAYED, IN_PROGRESS, COMPLETED})
 
 
 @dataclass(frozen=True)

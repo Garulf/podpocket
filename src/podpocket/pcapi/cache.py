@@ -9,6 +9,7 @@ from podpocket.discovery import find_podcasts
 from podpocket.feeds.errors import FeedError
 from podpocket.models import Podcast
 from podpocket.pcapi import serializers
+from podpocket.pcapi.wire import EncodableText
 from podpocket.services import Services, get_services
 
 router = APIRouter(prefix="/cache")
@@ -17,12 +18,12 @@ CACHEABLE = {"Cache-Control": "public, max-age=300"}
 
 
 class PodcastEpisodeSearch(BaseModel):
-    podcastuuid: str
-    searchterm: str
+    podcastuuid: EncodableText
+    searchterm: EncodableText
 
 
 class TermSearch(BaseModel):
-    term: str
+    term: EncodableText
 
 
 async def _fetched_podcast(services: Services, podcast_uuid: str) -> Podcast:
