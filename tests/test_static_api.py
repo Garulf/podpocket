@@ -3,6 +3,7 @@ import io
 import pytest
 from PIL import Image
 
+from podpocket.artwork import RETRY_FAILED_AFTER_SECONDS
 from podpocket.ids import podcast_uuid
 from podpocket.models import Podcast
 from tests.factories import png
@@ -145,6 +146,7 @@ async def test_top_list_survives_directory_failure(respx_mock, client):
 
     assert response.status_code == 200
     assert response.json()["podcasts"] == []
+    assert response.headers["cache-control"] == "public, max-age=60"
 
 
 async def test_startup_documents_are_harmless(client):
@@ -159,3 +161,102 @@ async def test_unknown_discover_documents_are_404(client):
     response = await client.get("/static/discover/android/something_else.json")
 
     assert response.status_code == 404
+
+
+DEFAULT_COLORS_BODY = {
+    "colors": {"background": "#3D3D3D", "tintForDarkBg": "#B3B3B3", "tintForLightBg": "#3D3D3D"}
+}
+
+
+async def test_oversized_image_is_refused_without_decoding(
+    respx_mock, client, podcast_with_art, monkeypatch
+):
+    huge = io.BytesIO()
+    Image.new("1", (6000, 5000)).save(huge, "PNG")
+    respx_mock.get(ART).respond(200, content=huge.getvalue())
+
+    def fail_decode(self, *args, **kwargs):
+        raise AssertionError("oversized image was decoded")
+
+    monkeypatch.setattr(Image.Image, "load", fail_decode)
+
+    image = await client.get(f"/static/discover/images/webp/480/{podcast_with_art}.webp")
+    colors = await client.get(f"/static/discover/images/metadata/{podcast_with_art}.json")
+
+    assert image.status_code == 404
+    assert colors.json() == DEFAULT_COLORS_BODY
+
+
+async def test_failing_image_host_gives_404_and_default_colors(
+    respx_mock, client, podcast_with_art
+):
+    respx_mock.get(ART).respond(503)
+
+    image = await client.get(f"/static/discover/images/webp/480/{podcast_with_art}.webp")
+    colors = await client.get(f"/static/discover/images/metadata/{podcast_with_art}.json")
+
+    assert image.status_code == 404
+    assert colors.status_code == 200
+    assert colors.json() == DEFAULT_COLORS_BODY
+
+
+async def test_corrupt_colors_file_falls_back_to_defaults(
+    respx_mock, client, podcast_with_art, settings
+):
+    respx_mock.get(ART).respond(200, content=png())
+    await client.get(f"/static/discover/images/webp/480/{podcast_with_art}.webp")
+    [rendered] = [p for p in (settings.cache_dir / "artwork").iterdir() if p.is_dir()]
+    (rendered / "colors.json").write_text("{not json")
+
+    colors = await client.get(f"/static/discover/images/metadata/{podcast_with_art}.json")
+
+    assert colors.status_code == 200
+    assert colors.json() == DEFAULT_COLORS_BODY
+
+
+async def test_unwritable_cache_gives_404_not_500(respx_mock, client, podcast_with_art, settings):
+    respx_mock.get(ART).respond(200, content=png())
+    (settings.cache_dir / "artwork").parent.mkdir(parents=True, exist_ok=True)
+    (settings.cache_dir / "artwork").write_text("a file where the cache directory should be")
+
+    image = await client.get(f"/static/discover/images/webp/480/{podcast_with_art}.webp")
+    colors = await client.get(f"/static/discover/images/metadata/{podcast_with_art}.json")
+
+    assert image.status_code == 404
+    assert colors.json() == DEFAULT_COLORS_BODY
+
+
+async def test_non_image_formats_are_rejected(respx_mock, client, podcast_with_art):
+    respx_mock.get(ART).respond(200, content=b"%!PS-Adobe-3.0 EPSF-3.0\n%%BoundingBox: 0 0 10 10\n")
+
+    response = await client.get(f"/static/discover/images/webp/480/{podcast_with_art}.webp")
+
+    assert response.status_code == 404
+
+
+async def test_failed_artwork_is_retried_after_the_cooldown(
+    respx_mock, client, services, podcast_with_art
+):
+    now = [1_000_000.0]
+    services.artwork._clock = lambda: now[0]
+    route = respx_mock.get(ART).respond(200, content=b"not an image")
+    url = f"/static/discover/images/webp/480/{podcast_with_art}.webp"
+
+    await client.get(url)
+    now[0] += RETRY_FAILED_AFTER_SECONDS - 1
+    await client.get(url)
+    assert route.call_count == 1
+
+    now[0] += 2
+    await client.get(url)
+    assert route.call_count == 2
+
+
+async def test_region_flag_is_a_png(client):
+    response = await client.get("/static/discover/images/flags/us.png")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "image/png"
+    assert response.headers["cache-control"] == "public, max-age=604800"
+    with Image.open(io.BytesIO(response.content)) as image:
+        assert image.format == "PNG"

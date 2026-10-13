@@ -1,8 +1,10 @@
+import io
 import logging
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
+from PIL import Image
 
 from podpocket import catalog
 from podpocket.artwork import SIZES
@@ -14,6 +16,16 @@ router = APIRouter(prefix="/static")
 ServicesDep = Annotated[Services, Depends(get_services)]
 HOURLY = {"Cache-Control": "public, max-age=3600"}
 WEEKLY = {"Cache-Control": "public, max-age=604800"}
+MINUTE = {"Cache-Control": "public, max-age=60"}
+
+
+def _flag_png() -> bytes:
+    buffer = io.BytesIO()
+    Image.new("RGB", (4, 3), (128, 128, 128)).save(buffer, "PNG")
+    return buffer.getvalue()
+
+
+FLAG_PNG = _flag_png()
 
 
 def discover_layout(public_url: str, region: str) -> dict[str, Any]:
@@ -70,9 +82,11 @@ async def categories() -> JSONResponse:
 async def top_podcasts(services: ServicesDep) -> JSONResponse:
     try:
         found = await services.directory.top()
+        headers = HOURLY
     except DirectoryError as exc:
         logger.warning("top chart unavailable: %s", exc)
         found = []
+        headers = MINUTE
     podcasts = await catalog.save_stubs(services.sessionmaker, found)
     return JSONResponse(
         {
@@ -80,7 +94,7 @@ async def top_podcasts(services: ServicesDep) -> JSONResponse:
             "list_id": "top",
             "podcasts": [{"uuid": p.uuid, "title": p.title, "author": p.author} for p in podcasts],
         },
-        headers=HOURLY,
+        headers=headers,
     )
 
 
@@ -97,6 +111,11 @@ async def artwork(size: int, podcast_uuid: str, services: ServicesDep) -> FileRe
 @router.get("/discover/images/metadata/{podcast_uuid}.json")
 async def artwork_colors(podcast_uuid: str, services: ServicesDep) -> dict:
     return {"colors": await services.artwork.colors(podcast_uuid)}
+
+
+@router.get("/discover/images/flags/{region}.png")
+async def flag(region: str) -> Response:
+    return Response(FLAG_PNG, media_type="image/png", headers=WEEKLY)
 
 
 @router.get("/discover/{platform}/{document}.json")

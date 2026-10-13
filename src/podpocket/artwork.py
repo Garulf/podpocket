@@ -23,6 +23,9 @@ logger = logging.getLogger(__name__)
 SIZES = (200, 480, 960)
 DEFAULT_COLORS = {"background": "#3D3D3D", "tintForDarkBg": "#B3B3B3", "tintForLightBg": "#3D3D3D"}
 RETRY_FAILED_AFTER_SECONDS = 3600
+MAX_PIXELS = 25_000_000
+RENDER_CONCURRENCY = 2
+ACCEPTED_FORMATS = ["PNG", "JPEG", "WEBP", "GIF"]
 WHITE = (255, 255, 255)
 BLACK = (0, 0, 0)
 
@@ -33,19 +36,25 @@ class ArtworkError(Exception):
 
 def render_artwork(content: bytes, directory: Path) -> None:
     try:
-        with Image.open(io.BytesIO(content)) as source:
+        with Image.open(io.BytesIO(content), formats=ACCEPTED_FORMATS) as source:
+            if source.width * source.height > MAX_PIXELS:
+                raise ArtworkError(f"image of {source.width}x{source.height} pixels is too large")
             upright = ImageOps.exif_transpose(source).convert("RGB")
         square = ImageOps.fit(upright, (SIZES[-1], SIZES[-1]), Image.Resampling.LANCZOS)
     except (OSError, ValueError, Image.DecompressionBombError) as exc:
         raise ArtworkError(str(exc)) from exc
     staging = directory.with_name(f"{directory.name}.partial")
-    shutil.rmtree(staging, ignore_errors=True)
-    staging.mkdir(parents=True)
-    for size in SIZES:
-        resized = square.resize((size, size), Image.Resampling.LANCZOS)
-        resized.save(staging / f"{size}.webp", "WEBP", quality=85)
-    (staging / "colors.json").write_text(json.dumps(palette(square)))
-    staging.rename(directory)
+    try:
+        shutil.rmtree(staging, ignore_errors=True)
+        staging.mkdir(parents=True)
+        for size in SIZES:
+            resized = square.resize((size, size), Image.Resampling.LANCZOS)
+            resized.save(staging / f"{size}.webp", "WEBP", quality=85)
+        (staging / "colors.json").write_text(json.dumps(palette(square)))
+        staging.rename(directory)
+    except OSError as exc:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise ArtworkError(str(exc)) from exc
 
 
 def palette(image: Image.Image) -> dict[str, str]:
@@ -80,6 +89,7 @@ class ArtworkStore:
         self._policy = policy
         self._clock = clock
         self._locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
+        self._renders = asyncio.Semaphore(RENDER_CONCURRENCY)
 
     async def image(self, podcast_uuid: str, size: int) -> Path | None:
         directory = await self._rendered(podcast_uuid)
@@ -89,7 +99,10 @@ class ArtworkStore:
         directory = await self._rendered(podcast_uuid)
         if directory is None:
             return dict(DEFAULT_COLORS)
-        return json.loads((directory / "colors.json").read_text())
+        try:
+            return json.loads((directory / "colors.json").read_text())
+        except (OSError, ValueError):
+            return dict(DEFAULT_COLORS)
 
     async def _rendered(self, podcast_uuid: str) -> Path | None:
         async with self._sessionmaker() as session:
@@ -106,18 +119,29 @@ class ArtworkStore:
             if directory.is_dir():
                 return directory
             marker = self._root / f"{key}.failed"
-            if (
-                marker.exists()
-                and self._clock() - marker.stat().st_mtime < RETRY_FAILED_AFTER_SECONDS
-            ):
+            if self._failed_recently(marker):
                 return None
             try:
                 result = await fetch(self._http, artwork_url, self._policy)
-                await asyncio.to_thread(render_artwork, result.content or b"", directory)
-            except (FeedError, ArtworkError) as exc:
+                async with self._renders:
+                    await asyncio.to_thread(render_artwork, result.content or b"", directory)
+            except (FeedError, ArtworkError, OSError) as exc:
                 logger.info("artwork for %s unavailable: %s", podcast_uuid, exc)
-                self._root.mkdir(parents=True, exist_ok=True)
-                marker.touch()
+                self._mark_failed(marker)
                 return None
             marker.unlink(missing_ok=True)
             return directory
+
+    def _failed_recently(self, marker: Path) -> bool:
+        try:
+            failed_at = float(marker.read_text())
+        except (OSError, ValueError):
+            return False
+        return self._clock() - failed_at < RETRY_FAILED_AFTER_SECONDS
+
+    def _mark_failed(self, marker: Path) -> None:
+        try:
+            self._root.mkdir(parents=True, exist_ok=True)
+            marker.write_text(str(self._clock()))
+        except OSError as exc:
+            logger.warning("cannot record artwork failure: %s", exc)
