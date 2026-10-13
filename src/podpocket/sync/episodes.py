@@ -6,6 +6,7 @@ from podpocket.sync.writer import (
     EPISODE,
     INT64_MAX,
     INT64_MIN,
+    MAX_CLOCK_SKEW_MS,
     ChangeWriter,
     load_by_keys,
     wins,
@@ -20,7 +21,6 @@ FIELDS = (
     "deselected_chapters",
 )
 PLAYING_STATUSES = frozenset({1, 2, 3})
-MAX_CLOCK_SKEW_MS = 3_600_000
 
 
 @dataclass(frozen=True)
