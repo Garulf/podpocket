@@ -17,8 +17,10 @@ LOGIN = "/api/2/auth/alice/login.json"
 ROUTES = [
     ("POST", "/api/2/auth/{user}/login.json"),
     ("POST", "/api/2/auth/{user}/logout.json"),
+    ("GET", "/api/2/subscriptions/{user}/phone.json"),
+    ("POST", "/api/2/subscriptions/{user}/phone.json"),
 ]
-BODIES: dict[str, object] = {}
+BODIES: dict[str, object] = {"/api/2/subscriptions/{user}/phone.json": {}}
 
 
 async def call(client, method, path, user, headers):

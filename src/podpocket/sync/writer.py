@@ -64,6 +64,7 @@ async def lock_user(session: AsyncSession, user_uuid: str) -> User:
 
 
 APP_SOURCE = "app"
+GPODDER_SOURCE = "gpodder"
 
 
 class ChangeWriter:
