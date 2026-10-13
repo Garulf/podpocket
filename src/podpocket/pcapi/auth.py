@@ -62,16 +62,14 @@ async def login(body: LoginRequest, services: ServicesDep) -> JSONResponse:
 async def token(request: Request, services: ServicesDep) -> JSONResponse:
     try:
         body = await request.json()
-    except ValueError:
+    except (ValueError, RecursionError):
         body = None
-    if (
-        not isinstance(body, dict)
-        or body.get("grant_type") != REFRESH_GRANT
-        or not isinstance(body.get("refresh_token"), str)
-    ):
+    if not isinstance(body, dict) or body.get("grant_type") != REFRESH_GRANT:
         return token_error(
             "unsupported_grant_type", "This server only supports signing in with a password."
         )
+    if not isinstance(body.get("refresh_token"), str):
+        return token_error("invalid_request", "A refresh token is required.")
     try:
         user, issued = await services.tokens.refresh(body["refresh_token"])
     except InvalidToken:

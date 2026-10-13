@@ -7,6 +7,15 @@ from tests.api import PASSWORD, bearer
 LOGIN = "/api/user/login_pocket_casts"
 TOKEN = "/api/user/token"
 STATUS = "/api/subscription/status"
+LOGIN_KEYS = {
+    "email",
+    "uuid",
+    "isNew",
+    "accessToken",
+    "refreshToken",
+    "tokenType",
+    "expiresIn",
+}
 
 
 def credentials(login, password=PASSWORD):
@@ -18,15 +27,7 @@ async def test_login_returns_every_required_key(client, alice):
 
     assert response.status_code == 200
     body = response.json()
-    assert set(body) == {
-        "email",
-        "uuid",
-        "isNew",
-        "accessToken",
-        "refreshToken",
-        "tokenType",
-        "expiresIn",
-    }
+    assert set(body) == LOGIN_KEYS
     assert body["email"] == "alice@example.com"
     assert body["uuid"] == alice.uuid
     assert body["isNew"] is False
@@ -77,6 +78,7 @@ async def test_refresh_grant_rotates_both_tokens(client, alice):
 
     assert response.status_code == 200
     body = response.json()
+    assert set(body) == LOGIN_KEYS
     assert body["uuid"] == alice.uuid
     assert body["refreshToken"] != login["refreshToken"]
     assert (await client.get(STATUS, headers=bearer(body["accessToken"]))).status_code == 200
@@ -97,7 +99,19 @@ async def test_token_failures_are_400_with_an_error_key(client, body):
     assert isinstance(response.json()["error"], str)
 
 
-@pytest.mark.parametrize("content", [b"{not json", b"\xff\xfe", b"[1, 2]"])
+@pytest.mark.parametrize(
+    "body", [{"grant_type": "refresh_token"}, {"grant_type": "refresh_token", "refresh_token": 7}]
+)
+async def test_refresh_grant_without_a_token_string_is_an_invalid_request(client, body):
+    response = await client.post(TOKEN, json=body)
+
+    assert response.status_code == 400
+    assert response.json()["error"] == "invalid_request"
+
+
+@pytest.mark.parametrize(
+    "content", [b"{not json", b"\xff\xfe", b"[1, 2]", b"[" * 200_000], ids=lambda c: str(c[:12])
+)
 async def test_token_with_a_body_that_is_not_an_object_is_400(client, content):
     response = await client.post(
         TOKEN, content=content, headers={"Content-Type": "application/json"}
