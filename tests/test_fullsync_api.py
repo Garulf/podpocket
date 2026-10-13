@@ -1,6 +1,7 @@
 import pytest
 
 from podpocket.catalog import list_episodes
+from podpocket.pcapi.fullsync import MAX_EPISODE_PAIRS
 from podpocket.protocol import sync_api_pb2 as pb
 from tests.api import PROTOBUF, post_proto
 from tests.factories import item, rss
@@ -220,3 +221,135 @@ async def test_starred_list_accepts_an_empty_body(client, alice_auth):
 @pytest.mark.parametrize("path", FULL_SYNC_PATHS)
 async def test_full_sync_lists_need_a_token(client, path):
     assert (await client.post(path, content=b"", headers=PROTOBUF)).status_code == 401
+
+
+async def test_podcast_episodes_clamps_positions_that_do_not_fit_the_wire(client, alice_auth):
+    await sync_update(
+        client,
+        alice_auth,
+        podcast_upload("p1"),
+        episode_upload("e1", "p1", played_up_to=(2**40, 1000), duration=(2**40, 1000)),
+    )
+
+    response = await client.post(
+        "/api/user/podcast/episodes", json={"uuid": "p1"}, headers=alice_auth
+    )
+
+    [episode] = response.json()["episodes"]
+    assert (episode["playedUpTo"], episode["duration"]) == (INT32_MAX, INT32_MAX)
+
+
+async def test_episodes_ignores_duplicate_pairs_and_keeps_request_order(
+    client, services, respx_mock, alice_auth
+):
+    respx_mock.get(FEED).respond(
+        200, content=rss(item(guid="ep-1", title="First"), item(guid="ep-2", title="Second"))
+    )
+    podcast_uuid = await services.refresher.resolve(FEED)
+    async with services.sessionmaker() as session:
+        newest, oldest = await list_episodes(session, podcast_uuid)
+    request = pb.PodcastsEpisodesRequest(
+        podcast_uuids=[podcast_uuid] * 4,
+        episode_uuids=[oldest.uuid, newest.uuid, oldest.uuid, newest.uuid],
+    )
+
+    response = await post_proto(
+        client, "/api/user/episodes", request, pb.EpisodesResponse, alice_auth
+    )
+
+    assert response.total == 2
+    assert [episode.uuid for episode in response.episodes] == [oldest.uuid, newest.uuid]
+
+
+async def test_episodes_omits_an_episode_asked_for_under_another_podcast(client, alice_auth, show):
+    _, episode_uuid = show
+    request = pb.PodcastsEpisodesRequest(podcast_uuids=["other"], episode_uuids=[episode_uuid])
+
+    response = await post_proto(
+        client, "/api/user/episodes", request, pb.EpisodesResponse, alice_auth
+    )
+
+    assert (response.total, len(response.episodes)) == (0, 0)
+
+
+async def test_episodes_caps_a_huge_request(client, alice_auth, show):
+    podcast_uuid, episode_uuid = show
+    count = MAX_EPISODE_PAIRS * 2
+    request = pb.PodcastsEpisodesRequest(
+        podcast_uuids=[podcast_uuid] + ["filler"] * (count - 1),
+        episode_uuids=[episode_uuid] + [f"missing-{index}" for index in range(count - 1)],
+    )
+
+    response = await post_proto(
+        client, "/api/user/episodes", request, pb.EpisodesResponse, alice_auth
+    )
+
+    assert response.total == 1
+
+
+async def test_episodes_ignores_pairs_beyond_the_cap(client, alice_auth, show):
+    podcast_uuid, episode_uuid = show
+    fillers = MAX_EPISODE_PAIRS
+    request = pb.PodcastsEpisodesRequest(
+        podcast_uuids=["filler"] * fillers + [podcast_uuid],
+        episode_uuids=[f"missing-{index}" for index in range(fillers)] + [episode_uuid],
+    )
+
+    response = await post_proto(
+        client, "/api/user/episodes", request, pb.EpisodesResponse, alice_auth
+    )
+
+    assert response.total == 0
+
+
+async def test_alice_never_sees_bobs_data(client, show, alice_auth, bob_auth):
+    podcast_uuid, episode_uuid = show
+    await sync_update(
+        client,
+        bob_auth,
+        podcast_upload("bobs-podcast", folder="bobs-folder"),
+        folder_upload("bobs-folder", name="Private"),
+        episode_upload("bobs-episode", "bobs-podcast", starred=(True, 1000)),
+        episode_upload(episode_uuid, podcast_uuid, played_up_to=(77, 1000), starred=(True, 1000)),
+        bookmark_upload("bobs-bookmark"),
+        playlist_upload("bobs-playlist"),
+    )
+
+    podcasts = await post_proto(
+        client,
+        "/api/user/podcast/list",
+        pb.UserPodcastListRequest(**LIST_REQUEST),
+        pb.UserPodcastListResponse,
+        alice_auth,
+    )
+    playlists = await post_proto(
+        client,
+        "/api/user/playlist/list",
+        pb.UserPlaylistListRequest(**LIST_REQUEST),
+        pb.UserPlaylistListResponse,
+        alice_auth,
+    )
+    bookmarks = await post_proto(
+        client, "/api/user/bookmark/list", pb.BookmarkRequest(), pb.BookmarksResponse, alice_auth
+    )
+    starred = await client.post(
+        "/api/starred/list", content=b"", headers={**alice_auth, **PROTOBUF}
+    )
+    in_podcast = await client.post(
+        "/api/user/podcast/episodes", json={"uuid": "bobs-podcast"}, headers=alice_auth
+    )
+    full = await post_proto(
+        client,
+        "/api/user/episodes",
+        pb.PodcastsEpisodesRequest(podcast_uuids=[podcast_uuid], episode_uuids=[episode_uuid]),
+        pb.EpisodesResponse,
+        alice_auth,
+    )
+
+    assert (list(podcasts.podcasts), list(podcasts.folders)) == ([], [])
+    assert list(playlists.playlists) == []
+    assert list(bookmarks.bookmarks) == []
+    assert list(pb.StarredEpisodesResponse.FromString(starred.content).episodes) == []
+    assert in_podcast.json() == {"subscribed": False, "episodes": []}
+    [episode] = full.episodes
+    assert (episode.played_up_to, episode.starred) == (0, False)

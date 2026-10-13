@@ -31,9 +31,10 @@ def account_deleted_after_auth(monkeypatch, services):
 async def test_account_deleted_mid_request_answers_401(
     client, alice_auth, account_deleted_after_auth, path, request_options
 ):
-    headers = {**alice_auth, **request_options.pop("headers", {})}
+    headers = {**alice_auth, **request_options.get("headers", {})}
+    body = {key: value for key, value in request_options.items() if key != "headers"}
 
-    response = await client.post(path, headers=headers, **request_options)
+    response = await client.post(path, headers=headers, **body)
 
     assert response.status_code == 401
     assert response.headers["www-authenticate"] == "Bearer"

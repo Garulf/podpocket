@@ -1,12 +1,13 @@
 import math
+from collections.abc import Iterable
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from podpocket import catalog
 from podpocket.accounts.dependencies import CurrentUser
 from podpocket.models import (
     Bookmark,
@@ -26,13 +27,15 @@ from podpocket.sync.bookmarks import bookmark_response
 from podpocket.sync.folders import podcast_folder
 from podpocket.sync.playlists import playlist_list_entry
 from podpocket.sync.podcasts import DEFAULT_EPISODES_SORT_ORDER
-from podpocket.sync.writer import load_by_keys
+from podpocket.sync.writer import KEY_CHUNK, load_by_keys
 
 router = APIRouter(prefix="/api")
 ServicesDep = Annotated[Services, Depends(get_services)]
 NOT_PLAYED = 1
+MAX_EPISODE_PAIRS = 10_000
 INT32_MIN = -(2**31)
 INT32_MAX = 2**31 - 1
+INT32_JSON_FIELDS = {"duration", "playing_status", "played_up_to"}
 JSON_EPISODE_FIELDS = (
     ("duration", "duration"),
     ("playing_status", "playingStatus"),
@@ -113,22 +116,24 @@ def _episode_json(state: UserEpisodeState) -> dict[str, Any]:
     for column, key in JSON_EPISODE_FIELDS:
         value = getattr(state, column)
         if value is not None:
-            body[key] = value
+            body[key] = _int32(value) if column in INT32_JSON_FIELDS else value
     return body
 
 
 @router.post("/user/episodes")
 async def episodes(request: Request, user: CurrentUser, services: ServicesDep) -> Response:
     message = await read_message(request, pb.PodcastsEpisodesRequest)
-    found: list[tuple[Episode, Podcast]] = []
+    pairs = _distinct_pairs(message.podcast_uuids, message.episode_uuids)
     async with services.sessionmaker() as session:
-        for podcast_uuid, episode_uuid in zip(
-            message.podcast_uuids, message.episode_uuids, strict=False
-        ):
-            episode = await catalog.find_episode(session, podcast_uuid, episode_uuid)
-            podcast = await session.get(Podcast, podcast_uuid) if episode is not None else None
-            if episode is not None and podcast is not None:
-                found.append((episode, podcast))
+        catalog_episodes = await _by_uuid(session, Episode, {episode for _, episode in pairs})
+        found = [
+            catalog_episodes[episode_uuid]
+            for podcast_uuid, episode_uuid in pairs
+            if episode_uuid in catalog_episodes
+            and catalog_episodes[episode_uuid].podcast_uuid == podcast_uuid
+        ]
+        podcasts = await _by_uuid(session, Podcast, {episode.podcast_uuid for episode in found})
+        found = [episode for episode in found if episode.podcast_uuid in podcasts]
         states = {
             state.episode_uuid: state
             for state in await load_by_keys(
@@ -136,17 +141,36 @@ async def episodes(request: Request, user: CurrentUser, services: ServicesDep) -
                 UserEpisodeState,
                 UserEpisodeState.episode_uuid,
                 user.uuid,
-                [episode.uuid for episode, _ in found],
+                [episode.uuid for episode in found],
             )
         }
     response = pb.EpisodesResponse(
         total=len(found),
         episodes=[
-            _episode_response(episode, podcast, states.get(episode.uuid))
-            for episode, podcast in found
+            _episode_response(episode, podcasts[episode.podcast_uuid], states.get(episode.uuid))
+            for episode in found
         ],
     )
     return protobuf_response(response)
+
+
+def _distinct_pairs(
+    podcast_uuids: Iterable[str], episode_uuids: Iterable[str]
+) -> list[tuple[str, str]]:
+    pairs = dict.fromkeys(zip(podcast_uuids, episode_uuids, strict=False))
+    return list(pairs)[:MAX_EPISODE_PAIRS]
+
+
+async def _by_uuid[M: (Episode, Podcast)](
+    session: AsyncSession, model: type[M], uuids: Iterable[str]
+) -> dict[str, M]:
+    ordered = sorted(set(uuids))
+    rows: dict[str, M] = {}
+    for start in range(0, len(ordered), KEY_CHUNK):
+        chunk = ordered[start : start + KEY_CHUNK]
+        for row in await session.scalars(select(model).where(model.uuid.in_(chunk))):
+            rows[row.uuid] = row
+    return rows
 
 
 def _episode_response(
