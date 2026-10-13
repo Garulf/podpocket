@@ -11,6 +11,7 @@ jobs:
     outputs:
       release_created: ${{ steps.release.outputs.release_created }}
       tag_name: ${{ steps.release.outputs.tag_name }}
+      version: ${{ steps.release.outputs.version }}
     steps:
       - id: release
         uses: googleapis/release-please-action@v5
@@ -34,8 +35,8 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository }}
           tags: |
-            type=semver,pattern={{version}},value=${{ needs.release-please.outputs.tag_name }}
-            type=semver,pattern={{major}}.{{minor}},value=${{ needs.release-please.outputs.tag_name }}
+            type=semver,pattern={{version}},value=${{ needs.release-please.outputs.version }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ needs.release-please.outputs.version }}
             type=raw,value=latest
       - uses: docker/build-push-action@v7
         with:
