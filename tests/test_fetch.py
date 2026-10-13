@@ -123,6 +123,13 @@ async def test_network_error_becomes_feed_error(respx_mock, http):
         await fetch(http, "https://feeds.test/down", OPEN)
 
 
+async def test_network_error_without_text_names_its_type(respx_mock, http):
+    respx_mock.get("https://feeds.test/slow").mock(side_effect=httpx.ReadTimeout(""))
+
+    with pytest.raises(FeedError, match="could not fetch https://feeds.test/slow: ReadTimeout"):
+        await fetch(http, "https://feeds.test/slow", OPEN)
+
+
 @pytest.mark.parametrize("url", ["file:///etc/passwd", "ftp://feeds.test/a", "https:///nohost"])
 async def test_rejects_non_http_urls(http, url):
     with pytest.raises(FeedError, match="unsupported URL"):

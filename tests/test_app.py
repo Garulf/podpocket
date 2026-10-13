@@ -76,6 +76,15 @@ async def test_client_allows_private_networks_when_configured(settings):
         assert "PodPocket" in http.headers["User-Agent"]
 
 
+@pytest.mark.parametrize("allow_private", [False, True])
+async def test_client_allows_thirty_seconds_per_request(settings, allow_private):
+    async with build_http_client(
+        settings.model_copy(update={"allow_private_feeds": allow_private})
+    ) as http:
+        timeout = http.timeout
+        assert (timeout.connect, timeout.read, timeout.write, timeout.pool) == (10, 30, 30, 30)
+
+
 @pytest.fixture
 def scheduler_probe(monkeypatch):
     probe = SimpleNamespace(started=asyncio.Event(), cancelled=False, calls=0)

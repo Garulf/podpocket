@@ -115,9 +115,14 @@ async def fetch(
     except TimeoutError as exc:
         raise FeedError(f"timed out fetching {url}") from exc
     except httpx.HTTPError as exc:
-        raise FeedError(f"could not fetch {url}: {exc}") from exc
+        raise FeedError(f"could not fetch {url}: {_describe(exc)}") from exc
     except (ValueError, httpx.InvalidURL) as exc:
         raise FeedError(f"unsupported URL {url}") from exc
+
+
+def _describe(error: Exception) -> str:
+    detail = str(error)
+    return f"{type(error).__name__}: {detail}" if detail else type(error).__name__
 
 
 async def _follow_redirects(

@@ -13,9 +13,16 @@ from podpocket.migrate import upgrade_to_head
 from podpocket.pcapi import cache, refresh, search, static
 from podpocket.services import build_services
 
+HTTP_TIMEOUT = httpx.Timeout(30.0, connect=10.0)
+
 
 def build_http_client(settings: Settings) -> httpx.AsyncClient:
-    options = {"headers": {"User-Agent": USER_AGENT}, "follow_redirects": False, "trust_env": False}
+    options = {
+        "headers": {"User-Agent": USER_AGENT},
+        "follow_redirects": False,
+        "trust_env": False,
+        "timeout": HTTP_TIMEOUT,
+    }
     if settings.allow_private_feeds:
         return httpx.AsyncClient(**options)
     return httpx.AsyncClient(transport=guarded_transport(), **options)
