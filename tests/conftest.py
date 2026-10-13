@@ -7,7 +7,7 @@ from podpocket.accounts import passwords
 from podpocket.accounts.users import create_user
 from podpocket.app import create_app
 from podpocket.config import Settings
-from tests.api import PASSWORD
+from tests.api import PASSWORD, sign_in
 
 TEST_SECRET_KEY = "k" * 48
 
@@ -58,3 +58,13 @@ async def alice(services):
 @pytest.fixture
 async def bob(services):
     return await create_user(services.sessionmaker, "bob", PASSWORD)
+
+
+@pytest.fixture
+async def alice_auth(client, alice):
+    return await sign_in(client, "alice")
+
+
+@pytest.fixture
+async def bob_auth(client, bob):
+    return await sign_in(client, "bob")
