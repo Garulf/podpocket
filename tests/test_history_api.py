@@ -171,11 +171,16 @@ async def test_a_listen_from_the_future_is_clamped_to_now(client, alice_auth):
     assert before <= int(change["modifiedAt"]) <= now_ms()
 
 
-async def test_a_clear_from_the_future_does_not_block_later_listens(client, alice_auth):
-    cleared = await sync(client, alice_auth, {"action": 3, "modifiedAt": str(2**62)})
+async def test_a_clear_from_the_future_does_not_block_later_listens(
+    client, alice_auth, monkeypatch
+):
+    clock = iter([5_000_000, 6_000_000])
+    monkeypatch.setattr("podpocket.pcapi.history.now_ms", lambda: next(clock))
 
-    assert cleared["lastCleared"] <= now_ms()
-    later = await sync(client, alice_auth, listen("e1", cleared["lastCleared"] + 10**9))
+    cleared = await sync(client, alice_auth, {"action": 3, "modifiedAt": str(2**62)})
+    later = await sync(client, alice_auth, listen("e1", 5_500_000))
+
+    assert cleared["lastCleared"] == 5_000_000
     assert [c["episode"] for c in later["changes"]] == ["e1"]
 
 
@@ -253,3 +258,52 @@ async def test_malformed_history_body_is_a_422(client, alice_auth):
     response = await client.post(HISTORY, json={"changes": "nope"}, headers=alice_auth)
 
     assert response.status_code == 422
+
+
+async def test_an_add_with_the_same_time_as_a_stored_removal_loses(client, alice_auth):
+    await sync(client, alice_auth, listen("e1", 1000, action=2))
+
+    body = await sync(client, alice_auth, listen("e1", 1000))
+
+    assert [(c["modifiedAt"], c["action"]) for c in body["changes"]] == [("1000", 2)]
+
+
+async def test_a_newer_add_replaces_a_stored_removal(client, alice_auth):
+    await sync(client, alice_auth, listen("e1", 1000, action=2))
+
+    body = await sync(client, alice_auth, listen("e1", 2000))
+
+    assert [(c["modifiedAt"], c["action"]) for c in body["changes"]] == [("2000", 1)]
+
+
+async def test_the_year_endpoint_leaves_out_removed_listens(client, alice_auth):
+    await sync(
+        client,
+        alice_auth,
+        listen("e1", LISTENED_2026),
+        listen("e2", LISTENED_2026),
+        listen("e2", LISTENED_2026 + 1, action=2),
+    )
+
+    counted = await client.post(
+        YEAR, json={"version": "1", "count": True, "year": 2026}, headers=alice_auth
+    )
+    listed = await client.post(
+        YEAR, json={"version": "1", "count": False, "year": 2026}, headers=alice_auth
+    )
+
+    assert counted.json() == {"count": 1}
+    assert [c["episode"] for c in listed.json()["history"]["changes"]] == ["e1"]
+
+
+async def test_the_year_endpoint_reports_the_cursor_of_the_current_request(client, alice_auth):
+    first = await sync(client, alice_auth, listen("e1", LISTENED_2026))
+    cleared = await sync(client, alice_auth, {"action": 3, "modifiedAt": "1000"})
+
+    response = await client.post(
+        YEAR, json={"version": "1", "count": False, "year": 2026}, headers=alice_auth
+    )
+
+    history = response.json()["history"]
+    assert history["serverModified"] == cleared["serverModified"] >= first["serverModified"]
+    assert history["lastCleared"] == 1000

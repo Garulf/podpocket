@@ -26,6 +26,10 @@ def from_epoch_ms(value: int) -> datetime:
     return EPOCH + timedelta(milliseconds=value)
 
 
+def plausible_published(value: datetime | None) -> datetime | None:
+    return value if value is not None and value >= EPOCH else None
+
+
 def now_ms() -> int:
     return epoch_ms(datetime.now(UTC))
 

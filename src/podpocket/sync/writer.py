@@ -18,6 +18,14 @@ PLAYLIST = "playlist"
 BOOKMARK = "bookmark"
 KEY_CHUNK = 500
 MAX_CLOCK_SKEW_MS = 0
+MAX_DECLARED_DIGITS = 19
+
+
+def parse_decimal_ms(text: str) -> int | None:
+    if not (text.isascii() and text.isdigit() and len(text) <= MAX_DECLARED_DIGITS):
+        return None
+    value = int(text)
+    return value if value <= INT64_MAX else None
 
 
 def wins(new_ms: int, new_value: object, old_ms: int | None, old_value: object) -> bool:

@@ -1,7 +1,7 @@
 from collections import OrderedDict
 from collections.abc import Iterable
 from dataclasses import dataclass, replace
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy import Row, delete, select
@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from podpocket.models import Episode, UpNextItem
 from podpocket.sync.writer import KEY_CHUNK, MAX_CLOCK_SKEW_MS, lock_user
+from podpocket.timefmt import plausible_published
 
 PLAY_NOW = 1
 PLAY_NEXT = 2
@@ -17,7 +18,6 @@ REMOVE = 4
 REPLACE = 5
 SINGLE_EPISODE_ACTIONS = frozenset({PLAY_NOW, PLAY_NEXT, PLAY_LAST, REMOVE})
 MAX_QUEUE = 10_000
-EARLIEST_PUBLISHED = datetime(1970, 1, 1, tzinfo=UTC)
 
 
 @dataclass(frozen=True)
@@ -106,7 +106,8 @@ def _bounded(change: QueueChange, now_ms: int) -> QueueChange:
         modified_ms=min(change.modified_ms, now_ms + MAX_CLOCK_SKEW_MS),
         entry=_plausible(change.entry),
         entries=tuple(
-            replace(entry, published=_plausible_date(entry.published)) for entry in change.entries
+            replace(entry, published=plausible_published(entry.published))
+            for entry in change.entries
         ),
     )
 
@@ -114,11 +115,7 @@ def _bounded(change: QueueChange, now_ms: int) -> QueueChange:
 def _plausible(entry: QueueEntry | None) -> QueueEntry | None:
     if entry is None:
         return None
-    return replace(entry, published=_plausible_date(entry.published))
-
-
-def _plausible_date(value: datetime | None) -> datetime | None:
-    return value if value is not None and value >= EARLIEST_PUBLISHED else None
+    return replace(entry, published=plausible_published(entry.published))
 
 
 async def sync_up_next(
@@ -193,5 +190,5 @@ def _filled(entry: QueueEntry, episode: Row[Any] | None) -> QueueEntry:
         podcast_uuid=entry.podcast_uuid or episode.podcast_uuid,
         title=entry.title or episode.title,
         url=entry.url or episode.enclosure_url,
-        published=entry.published or _plausible_date(episode.published),
+        published=entry.published or plausible_published(episode.published),
     )

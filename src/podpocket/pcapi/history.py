@@ -4,11 +4,11 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
 from podpocket.accounts.dependencies import CurrentUser
-from podpocket.models import HistoryEntry
-from podpocket.pcapi.wire import MAX_DECLARED_DIGITS, Int64
+from podpocket.models import HistoryEntry, User
+from podpocket.pcapi.wire import Int64
 from podpocket.services import Services, get_services
 from podpocket.sync.history import HistoryChange, history_for_year, sync_history
-from podpocket.sync.writer import INT64_MAX
+from podpocket.sync.writer import parse_decimal_ms
 from podpocket.timefmt import iso_z, now_ms, parse_iso
 
 router = APIRouter(prefix="/api")
@@ -38,15 +38,8 @@ class HistoryYearBody(BaseModel):
     year: int
 
 
-def _modified_ms(text: str) -> int | None:
-    if not (text.isascii() and text.isdigit() and len(text) <= MAX_DECLARED_DIGITS):
-        return None
-    value = int(text)
-    return value if value <= INT64_MAX else None
-
-
 def _change(body: HistoryChangeBody) -> HistoryChange | None:
-    modified_ms = _modified_ms(body.modifiedAt)
+    modified_ms = parse_decimal_ms(body.modifiedAt)
     if modified_ms is None:
         return None
     return HistoryChange(
@@ -99,12 +92,13 @@ async def history_year(
 ) -> dict[str, Any]:
     async with services.sessionmaker() as session:
         entries = await history_for_year(session, user.uuid, body.year)
+        stored = await session.get(User, user.uuid, populate_existing=True)
     if body.count:
         return {"count": len(entries)}
     return {
         "history": {
-            "serverModified": user.history_modified_ms,
-            "lastCleared": user.history_cleared_ms,
+            "serverModified": stored.history_modified_ms if stored else 0,
+            "lastCleared": stored.history_cleared_ms if stored else 0,
             "changes": [_change_json(entry) for entry in entries],
         }
     }

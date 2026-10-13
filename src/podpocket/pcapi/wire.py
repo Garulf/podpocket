@@ -7,13 +7,12 @@ from pydantic import BaseModel, Field
 from starlette.types import ASGIApp, Receive, Scope, Send
 from starlette.types import Message as AsgiMessage
 
-from podpocket.sync.writer import INT64_MAX
+from podpocket.sync.writer import INT64_MAX, MAX_DECLARED_DIGITS
 
 PROTOBUF_MEDIA_TYPE = "application/octet-stream"
 PROTOBUF_MEDIA_TYPES = frozenset({PROTOBUF_MEDIA_TYPE, "application/x-protobuf"})
 MAX_REQUEST_BYTES = 32 * 1024 * 1024
 TOO_LARGE = "request body too large"
-MAX_DECLARED_DIGITS = 19
 
 Int64 = Annotated[int, Field(ge=-INT64_MAX - 1, le=INT64_MAX)]
 

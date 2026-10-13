@@ -6,9 +6,8 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from podpocket.models import HistoryEntry
-from podpocket.sync.upnext import EARLIEST_PUBLISHED
 from podpocket.sync.writer import MAX_CLOCK_SKEW_MS, load_by_keys, lock_user, wins
-from podpocket.timefmt import epoch_ms
+from podpocket.timefmt import epoch_ms, plausible_published
 
 ADD = 1
 DELETE = 2
@@ -36,11 +35,10 @@ class HistoryState:
 
 
 def _bounded(change: HistoryChange, now_ms: int) -> HistoryChange:
-    published = change.published
     return replace(
         change,
         modified_ms=min(change.modified_ms, now_ms + MAX_CLOCK_SKEW_MS),
-        published=published if published is not None and published >= EARLIEST_PUBLISHED else None,
+        published=plausible_published(change.published),
     )
 
 
