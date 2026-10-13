@@ -1,8 +1,11 @@
 import base64
+from datetime import timedelta
 
 import pytest
+from argon2 import PasswordHasher
 from fastapi import APIRouter
 from fastapi.responses import Response
+from sqlalchemy import delete
 
 from podpocket.accounts import passwords, throttle
 from podpocket.accounts.throttle import MAX_FAILURES
@@ -10,6 +13,8 @@ from podpocket.accounts.users import remove_user, set_password
 from podpocket.gpodder import credentials
 from podpocket.gpodder.auth import GpodderRoute, GpodderUser, basic_credentials
 from podpocket.gpodder.credentials import CredentialCache
+from podpocket.models import User
+from podpocket.sync import writer
 from tests.api import PASSWORD
 from tests.gpodder import basic
 
@@ -398,3 +403,66 @@ async def test_an_entry_evicted_during_the_lookup_is_not_an_error(services, alic
 
     assert user.uuid == alice.uuid
     assert cache._verified == {}
+
+
+MUSIC_ASSISTANT_SYNC_INTERVAL_SECONDS = timedelta(hours=12).total_seconds()
+
+
+async def test_verified_credentials_outlive_music_assistants_sync_interval(
+    client, services, alice, hashing_checks
+):
+    clock = Clock()
+    services.gpodder_credentials = CredentialCache("k" * 48, clock)
+    await client.post(LOGIN, headers=basic("alice"))
+
+    clock.now += MUSIC_ASSISTANT_SYNC_INTERVAL_SECONDS + 60
+
+    assert (await client.post(LOGIN, headers=basic("alice"))).status_code == 200
+    assert len(hashing_checks) == 1
+
+
+async def test_a_lockout_between_music_assistant_syncs_does_not_lock_it_out(
+    client, services, alice
+):
+    clock = Clock()
+    services.gpodder_credentials = CredentialCache("k" * 48, clock)
+    await client.post(LOGIN, headers=basic("alice"))
+    clock.now += MUSIC_ASSISTANT_SYNC_INTERVAL_SECONDS
+    for _ in range(MAX_FAILURES):
+        await client.post(LOGIN, headers=basic("alice", "wrong password"))
+
+    clock.now += MUSIC_ASSISTANT_SYNC_INTERVAL_SECONDS
+
+    assert (await client.post(LOGIN, headers=basic("alice"))).status_code == 200
+
+
+async def test_upgraded_password_hash_is_what_the_cache_remembers(
+    client, services, alice, hashing_checks, monkeypatch
+):
+    monkeypatch.setattr(
+        passwords, "HASHER", PasswordHasher(time_cost=2, memory_cost=16, parallelism=1)
+    )
+
+    for _ in range(2):
+        assert (await client.post(LOGIN, headers=basic("alice"))).status_code == 200
+
+    assert len(hashing_checks) == 1
+
+
+async def test_account_deleted_mid_request_answers_401_with_the_basic_challenge(
+    client, services, alice, monkeypatch
+):
+    real_lock_user = writer.lock_user
+
+    async def lock_after_deleting(session, user_uuid):
+        async with services.sessionmaker() as other:
+            await other.execute(delete(User).where(User.uuid == user_uuid))
+            await other.commit()
+        return await real_lock_user(session, user_uuid)
+
+    monkeypatch.setattr(writer, "lock_user", lock_after_deleting)
+
+    response = await client.post("/api/2/episodes/alice.json", json=[], headers=basic("alice"))
+
+    assert response.status_code == 401
+    assert response.headers["www-authenticate"].startswith("Basic ")

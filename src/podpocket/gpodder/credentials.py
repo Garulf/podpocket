@@ -7,7 +7,7 @@ from dataclasses import dataclass, replace
 from podpocket.accounts.users import Sessionmaker, normalize_login
 from podpocket.models import User
 
-CREDENTIAL_TTL_SECONDS = 300.0
+CREDENTIAL_TTL_SECONDS = 7 * 24 * 60 * 60.0
 MAX_CACHED_CREDENTIALS = 1024
 
 

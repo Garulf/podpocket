@@ -11,7 +11,7 @@ from podpocket.accounts.throttle import LoginBusy, LoginRefused
 from podpocket.accounts.users import normalize_login
 from podpocket.models import User
 from podpocket.services import Services, get_services
-from podpocket.sync.writer import is_clean_text
+from podpocket.sync.writer import UserGone, is_clean_text
 
 BASIC_CHALLENGE = {"WWW-Authenticate": 'Basic realm="Pod Pocket", charset="UTF-8"'}
 MAX_CREDENTIALS_LENGTH = 4096
@@ -104,6 +104,9 @@ class GpodderRoute(APIRoute):
             request.scope[GPODDER_SCOPE_KEY] = await authenticate_for_url(
                 request, get_services(request), request.path_params["username"]
             )
-            return await handler(request)
+            try:
+                return await handler(request)
+            except UserGone as exc:
+                raise _unauthorized() from exc
 
         return authenticate_then_handle
