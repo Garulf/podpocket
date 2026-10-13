@@ -2,7 +2,16 @@ from collections import defaultdict
 from dataclasses import dataclass
 from typing import Annotated, Any
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictInt,
+    StrictStr,
+    TypeAdapter,
+    ValidationError,
+    field_validator,
+)
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -18,7 +27,7 @@ MAX_TIMESTAMP_LENGTH = 64
 LATEST_EPOCH_SECONDS = 253402300799
 
 Url = Annotated[StorableText, Field(max_length=MAX_URL_LENGTH)]
-Seconds = Annotated[float, Field(ge=0, le=INT32_MAX, allow_inf_nan=False)]
+Seconds = Annotated[float, Field(strict=True, ge=0, le=INT32_MAX, allow_inf_nan=False)]
 
 
 class EpisodeAction(BaseModel):
@@ -28,9 +37,18 @@ class EpisodeAction(BaseModel):
     episode: Url
     action: Annotated[StorableText, Field(max_length=16)]
     guid: Url | None = None
-    timestamp: Annotated[str, Field(max_length=MAX_TIMESTAMP_LENGTH)] | int | None = None
+    timestamp: Annotated[StrictStr, Field(max_length=MAX_TIMESTAMP_LENGTH)] | StrictInt | None = (
+        None
+    )
     position: Seconds | None = None
     total: Seconds | None = None
+
+    @field_validator("timestamp")
+    @classmethod
+    def _timestamp_is_usable(cls, timestamp: str | int | None) -> str | int | None:
+        if timestamp is not None:
+            timestamp_ms(timestamp)
+        return timestamp
 
     @property
     def kind(self) -> str:
@@ -63,11 +81,19 @@ def parse_actions(items: list[Any]) -> tuple[list[EpisodeAction], int]:
     return actions, ignored
 
 
-def action_ms(timestamp: str | int | None, now_ms: int) -> int:
+def timestamp_ms(timestamp: str | int) -> int:
     if isinstance(timestamp, int):
-        return timestamp * 1000 if 0 <= timestamp <= LATEST_EPOCH_SECONDS else now_ms
-    parsed = parse_iso(timestamp)
-    return epoch_ms(parsed) if parsed is not None else now_ms
+        if not 0 <= timestamp <= LATEST_EPOCH_SECONDS:
+            raise ValueError("epoch seconds out of range")
+        return timestamp * 1000
+    parsed = None if timestamp.strip().isdigit() else parse_iso(timestamp)
+    if parsed is None or (milliseconds := epoch_ms(parsed)) < 0:
+        raise ValueError("unusable timestamp")
+    return milliseconds
+
+
+def action_ms(timestamp: str | int | None, now_ms: int) -> int:
+    return now_ms if timestamp is None else timestamp_ms(timestamp)
 
 
 def episode_change(action: EpisodeAction, episode: Episode, now_ms: int) -> EpisodeChange:
@@ -91,13 +117,11 @@ def episode_change(action: EpisodeAction, episode: Episode, now_ms: int) -> Epis
     )
 
 
-async def _podcast_uuid(session: AsyncSession, raw_url: str) -> str | None:
+def _feed_url(raw_url: str) -> str | None:
     try:
-        url = normalize_feed_url(raw_url)
+        return normalize_feed_url(raw_url)
     except ValueError:
         return None
-    podcast = await find_podcast_by_url(session, url)
-    return podcast.uuid if podcast is not None else None
 
 
 async def _candidates(
@@ -130,12 +154,12 @@ class EpisodeIndex:
         return found or self.by_url.get(action.episode)
 
 
-async def _index(session: AsyncSession, raw_url: str, group: list[EpisodeAction]) -> EpisodeIndex:
+async def _index(session: AsyncSession, url: str, group: list[EpisodeAction]) -> EpisodeIndex:
     index = EpisodeIndex(by_guid={}, by_url={})
-    podcast_uuid = await _podcast_uuid(session, raw_url)
-    if podcast_uuid is None:
+    podcast = await find_podcast_by_url(session, url)
+    if podcast is None:
         return index
-    for episode in await _candidates(session, podcast_uuid, group):
+    for episode in await _candidates(session, podcast.uuid, group):
         if episode.guid:
             index.by_guid.setdefault(episode.guid, episode)
         index.by_url.setdefault(episode.enclosure_url, episode)
@@ -145,18 +169,32 @@ async def _index(session: AsyncSession, raw_url: str, group: list[EpisodeAction]
 async def match_actions(
     session: AsyncSession, actions: list[EpisodeAction]
 ) -> list[tuple[EpisodeAction, Episode | None]]:
+    feed_urls = [_feed_url(action.podcast) for action in actions]
     groups: defaultdict[str, list[EpisodeAction]] = defaultdict(list)
-    for action in actions:
-        groups[action.podcast].append(action)
-    indexes = {raw_url: await _index(session, raw_url, group) for raw_url, group in groups.items()}
-    return [(action, indexes[action.podcast].find(action)) for action in actions]
+    for action, url in zip(actions, feed_urls, strict=True):
+        if url is not None:
+            groups[url].append(action)
+    indexes = {url: await _index(session, url, group) for url, group in groups.items()}
+    return [
+        (action, indexes[url].find(action) if url is not None else None)
+        for action, url in zip(actions, feed_urls, strict=True)
+    ]
 
 
 def plan_changes(
     pairs: list[tuple[EpisodeAction, Episode | None]], now_ms: int, ignored: int
 ) -> tuple[list[EpisodeChange], UploadReport]:
-    changes = [episode_change(action, episode, now_ms) for action, episode in pairs if episode]
+    newest: dict[str, tuple[tuple[int, int], EpisodeAction, Episode]] = {}
+    for order, (action, episode) in enumerate(pairs):
+        if episode is None:
+            continue
+        rank = (action_ms(action.timestamp, now_ms), order)
+        if episode.uuid not in newest or rank > newest[episode.uuid][0]:
+            newest[episode.uuid] = (rank, action, episode)
+    changes = [episode_change(action, episode, now_ms) for _, action, episode in newest.values()]
     report = UploadReport(
-        applied=len(changes), unmatched=len(pairs) - len(changes), ignored=ignored
+        applied=len(changes),
+        unmatched=sum(1 for _, episode in pairs if episode is None),
+        ignored=ignored,
     )
     return changes, report

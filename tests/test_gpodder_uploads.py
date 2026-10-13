@@ -179,7 +179,7 @@ async def test_missing_timestamp_uses_the_receive_time(client, services, respx_m
     await post_actions(client, "alice", [play(90, timestamp=None)])
 
     state = await episode_state(services, alice.uuid, episode_id(show))
-    assert state.played_up_to_modified >= before
+    assert before <= state.played_up_to_modified <= now_ms()
 
 
 async def test_epoch_seconds_timestamp_is_accepted(client, services, respx_mock, alice):
@@ -194,10 +194,66 @@ async def test_epoch_seconds_timestamp_is_accepted(client, services, respx_mock,
 async def test_future_timestamp_is_capped_at_now(client, services, respx_mock, alice):
     show = await ingest(respx_mock, services)
 
+    before = now_ms()
+
     await post_actions(client, "alice", [play(90, timestamp="2999-01-01T00:00:00")])
 
     state = await episode_state(services, alice.uuid, episode_id(show))
-    assert state.played_up_to_modified <= now_ms()
+    assert before <= state.played_up_to_modified <= now_ms()
+
+
+@pytest.mark.parametrize(
+    "timestamp",
+    [
+        "2026-10-12T08:00:00Z",
+        "2026-10-12T10:00:00+02:00",
+        "2026-10-12T03:00:00-05:00",
+        "2026-10-12 08:00:00",
+    ],
+)
+async def test_timestamps_are_read_as_utc(client, services, respx_mock, alice, timestamp):
+    show = await ingest(respx_mock, services)
+
+    await post_actions(client, "alice", [play(90, timestamp=timestamp)])
+
+    state = await episode_state(services, alice.uuid, episode_id(show))
+    assert state.played_up_to_modified == STAMP_MS
+
+
+@pytest.mark.parametrize(
+    "timestamp",
+    [
+        "garbage",
+        "",
+        "1760000000",
+        True,
+        -1,
+        253402300800,
+        "9999-12-31T23:59:59-05:00",
+        "0001-01-01T00:00:00+05:00",
+        "0001-01-01T00:00:00",
+    ],
+)
+async def test_present_but_invalid_timestamp_is_ignored(
+    client, services, respx_mock, alice, caplog, timestamp
+):
+    show = await ingest(respx_mock, services)
+
+    with caplog.at_level(logging.INFO, logger="podpocket.gpodder.router"):
+        response = await post_actions(client, "alice", [play(90, timestamp=timestamp)])
+
+    assert response.status_code == 200
+    assert await episode_state(services, alice.uuid, episode_id(show)) is None
+    assert "0 applied, 0 unmatched, 1 ignored" in caplog.text
+
+
+@pytest.mark.parametrize("field", ["position", "total"])
+async def test_boolean_seconds_are_ignored(client, services, respx_mock, alice, field):
+    show = await ingest(respx_mock, services)
+
+    await post_actions(client, "alice", [play(120) | {field: True}])
+
+    assert await episode_state(services, alice.uuid, episode_id(show)) is None
 
 
 async def test_stale_action_loses_to_newer_app_progress(
@@ -224,6 +280,63 @@ async def test_actions_in_one_upload_merge_by_their_timestamps(client, services,
     )
 
     assert (await episode_state(services, alice.uuid, episode_id(show))).played_up_to == 300
+
+
+async def test_same_second_duplicates_resolve_to_the_last_action(
+    client, services, respx_mock, alice
+):
+    show = await ingest(respx_mock, services)
+    new = {"podcast": FEED, "episode": EPISODE_1, "action": "new", "timestamp": STAMP}
+
+    await post_actions(client, "alice", [play(300), new])
+
+    state = await episode_state(services, alice.uuid, episode_id(show))
+    assert (state.played_up_to, state.playing_status) == (0, 1)
+
+
+async def test_same_second_duplicates_keep_the_later_play(client, services, respx_mock, alice):
+    show = await ingest(respx_mock, services)
+    new = {"podcast": FEED, "episode": EPISODE_1, "action": "new", "timestamp": STAMP}
+
+    await post_actions(client, "alice", [new, play(100), play(99)])
+
+    state = await episode_state(services, alice.uuid, episode_id(show))
+    assert (state.played_up_to, state.playing_status) == (99, 2)
+
+
+async def test_request_order_does_not_override_timestamps(client, services, respx_mock, alice):
+    show = await ingest(respx_mock, services)
+
+    await post_actions(
+        client,
+        "alice",
+        [play(300, timestamp="2026-10-12T09:00:00"), play(100, timestamp="2026-10-12T08:00:00")],
+    )
+
+    assert (await episode_state(services, alice.uuid, episode_id(show))).played_up_to == 300
+
+
+async def test_every_spelling_of_a_feed_url_matches(client, services, respx_mock, alice):
+    show = await ingest(respx_mock, services)
+    spellings = [FEED, "HTTPS://FEEDS.TEST:443/show.xml", "feed:" + FEED]
+
+    await post_actions(
+        client, "alice", [play(60 + n, podcast=url) for n, url in enumerate(spellings)]
+    )
+
+    assert (await episode_state(services, alice.uuid, episode_id(show))).played_up_to == 62
+
+
+async def test_actions_only_touch_the_callers_state(client, services, respx_mock, alice, bob):
+    show = await ingest(respx_mock, services)
+
+    await post_actions(client, "alice", [play(60)])
+
+    assert (await episode_state(services, alice.uuid, episode_id(show))).played_up_to == 60
+    assert await episode_state(services, bob.uuid, episode_id(show)) is None
+    await post_actions(client, "bob", [play(10, timestamp="2026-10-12T09:00:00")])
+    assert (await episode_state(services, alice.uuid, episode_id(show))).played_up_to == 60
+    assert (await episode_state(services, bob.uuid, episode_id(show))).played_up_to == 10
 
 
 async def test_body_must_be_a_list(client, alice):
