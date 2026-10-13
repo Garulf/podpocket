@@ -4,9 +4,12 @@ import pytest
 from fastapi import APIRouter
 from fastapi.responses import Response
 
+from podpocket.accounts import passwords, throttle
 from podpocket.accounts.throttle import MAX_FAILURES
-from podpocket.accounts.users import set_password
+from podpocket.accounts.users import remove_user, set_password
+from podpocket.gpodder import credentials
 from podpocket.gpodder.auth import GpodderRoute, GpodderUser, basic_credentials
+from podpocket.gpodder.credentials import CredentialCache
 from tests.api import PASSWORD
 from tests.gpodder import basic
 
@@ -166,3 +169,162 @@ async def test_credentials_are_checked_before_the_body_is_parsed(app, client, al
     )
 
     assert response.status_code == 401
+
+
+class Clock:
+    def __init__(self):
+        self.now = 1000.0
+
+    def __call__(self):
+        return self.now
+
+
+@pytest.fixture
+def hashing_checks(services, monkeypatch):
+    checks = []
+    original = services.login_gate.authenticate
+
+    async def counted(*args):
+        checks.append(args)
+        return await original(*args)
+
+    monkeypatch.setattr(services.login_gate, "authenticate", counted)
+    return checks
+
+
+def test_gpodder_route_without_a_username_segment_fails_at_startup():
+    extra = APIRouter(route_class=GpodderRoute)
+
+    with pytest.raises(RuntimeError, match="username"):
+
+        @extra.get("/no-user-here")
+        async def probe(user: GpodderUser) -> Response:
+            return Response(status_code=200)
+
+
+@pytest.mark.parametrize("url_user", ["alice", "nobody"])
+async def test_missing_credentials_answer_401_whatever_the_url_names(client, alice, url_user):
+    response = await client.post(f"/api/2/auth/{url_user}/login.json")
+
+    assert response.status_code == 401
+
+
+async def test_nonexistent_url_user_answers_403_after_authentication(client, alice, bob):
+    existing = await client.post("/api/2/auth/bob/login.json", headers=basic("alice"))
+    missing = await client.post("/api/2/auth/nobody/login.json", headers=basic("alice"))
+
+    assert existing.status_code == missing.status_code == 403
+    assert existing.json() == missing.json()
+
+
+async def test_locked_unknown_login_answers_like_a_locked_real_one(client, alice):
+    for login in ("alice", "mallory"):
+        for _ in range(MAX_FAILURES):
+            await client.post(f"/api/2/auth/{login}/login.json", headers=basic(login, "wrong"))
+
+    real = await client.post(LOGIN, headers=basic("alice"))
+    unknown = await client.post("/api/2/auth/mallory/login.json", headers=basic("mallory"))
+
+    assert real.status_code == unknown.status_code == 429
+    assert real.json() == unknown.json()
+    assert real.headers["retry-after"] == unknown.headers["retry-after"] == "30"
+
+
+async def test_a_busy_refusal_looks_the_same_but_retries_soon(client, alice, monkeypatch):
+    monkeypatch.setattr(throttle, "LOGIN_WAIT_SECONDS", 0.01)
+    passwords.configure(1)
+    for _ in range(MAX_FAILURES):
+        await client.post(LOGIN, headers=basic("alice", "wrong password"))
+    locked = await client.post(LOGIN, headers=basic("alice"))
+
+    async with passwords.hashing_slot(1):
+        busy = await client.post("/api/2/auth/mallory/login.json", headers=basic("mallory"))
+
+    assert busy.status_code == 429
+    assert busy.json() == locked.json()
+    assert busy.headers["retry-after"] == "2"
+
+
+async def test_verified_credentials_skip_the_password_check(client, alice, hashing_checks):
+    for _ in range(3):
+        assert (await client.post(LOGIN, headers=basic("alice"))).status_code == 200
+
+    assert len(hashing_checks) == 1
+
+
+async def test_a_wrong_password_is_never_served_from_the_cache(client, alice, hashing_checks):
+    await client.post(LOGIN, headers=basic("alice"))
+
+    response = await client.post(LOGIN, headers=basic("alice", "wrong password"))
+
+    assert response.status_code == 401
+    assert len(hashing_checks) == 2
+
+
+async def test_verified_credentials_ignore_the_lockout(client, alice):
+    await client.post(LOGIN, headers=basic("alice"))
+    for _ in range(MAX_FAILURES):
+        await client.post(LOGIN, headers=basic("alice", "wrong password"))
+
+    assert (await client.post(LOGIN, headers=basic("alice"))).status_code == 200
+
+
+async def test_verified_credentials_expire(client, services, alice, hashing_checks):
+    clock = Clock()
+    services.gpodder_credentials = CredentialCache("k" * 48, clock)
+    await client.post(LOGIN, headers=basic("alice"))
+    clock.now += credentials.CREDENTIAL_TTL_SECONDS - 1
+    await client.post(LOGIN, headers=basic("alice"))
+    assert len(hashing_checks) == 1
+
+    clock.now += 1
+    await client.post(LOGIN, headers=basic("alice"))
+
+    assert len(hashing_checks) == 2
+
+
+async def test_password_change_invalidates_verified_credentials(client, services, alice):
+    await client.post(LOGIN, headers=basic("alice"))
+    await set_password(services.sessionmaker, "alice", "new password")
+
+    old = await client.post(LOGIN, headers=basic("alice", PASSWORD))
+    new = await client.post(LOGIN, headers=basic("alice", "new password"))
+
+    assert (old.status_code, new.status_code) == (401, 200)
+
+
+async def test_removed_account_invalidates_verified_credentials(client, services, alice):
+    await client.post(LOGIN, headers=basic("alice"))
+    await remove_user(services.sessionmaker, "alice")
+
+    assert (await client.post(LOGIN, headers=basic("alice"))).status_code == 401
+
+
+async def test_least_recently_used_credentials_are_evicted(
+    client, alice, bob, hashing_checks, monkeypatch
+):
+    monkeypatch.setattr(credentials, "MAX_CACHED_CREDENTIALS", 2)
+
+    async def sign_in(login):
+        await client.post(f"/api/2/auth/{login}/login.json", headers=basic(login))
+
+    for login in ("alice", "alice@example.com", "bob", "alice@example.com"):
+        await sign_in(login)
+    assert len(hashing_checks) == 3
+
+    await sign_in("alice")
+    assert len(hashing_checks) == 4
+
+    await sign_in("alice@example.com")
+    assert len(hashing_checks) == 4
+    await sign_in("bob")
+    assert len(hashing_checks) == 5
+
+
+def test_the_cache_keys_hide_the_credentials():
+    cache = CredentialCache("k" * 48)
+    fingerprint = cache._fingerprint("alice", "correct horse battery")
+
+    assert len(fingerprint) == 32
+    assert b"correct" not in fingerprint
+    assert fingerprint != CredentialCache("j" * 48)._fingerprint("alice", "correct horse battery")

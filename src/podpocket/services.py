@@ -13,6 +13,7 @@ from podpocket.config import Settings
 from podpocket.directory.itunes import ITunesDirectory
 from podpocket.feeds.fetch import FetchPolicy
 from podpocket.feeds.refresher import FeedRefresher
+from podpocket.gpodder.credentials import CredentialCache
 from podpocket.opml import OpmlImports
 
 
@@ -27,6 +28,7 @@ class Services:
     artwork: ArtworkStore
     tokens: TokenService
     login_gate: LoginGate
+    gpodder_credentials: CredentialCache
 
 
 def build_services(
@@ -62,6 +64,7 @@ def build_services(
             timedelta(minutes=settings.access_token_minutes),
         ),
         login_gate=LoginGate(),
+        gpodder_credentials=CredentialCache(settings.secret_key.get_secret_value()),
     )
 
 
