@@ -5,7 +5,7 @@ import httpx
 import jwt
 import pytest
 from fastapi import FastAPI
-from sqlalchemy import delete, select
+from sqlalchemy import delete, event, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from podpocket.accounts import tokens as tokens_module
@@ -321,3 +321,21 @@ async def test_access_token_signed_with_another_algorithm_is_rejected(services, 
 
     with pytest.raises(InvalidToken):
         await tokens.authenticate(forged)
+
+
+async def test_unknown_refresh_token_never_takes_the_write_lock(tokens, services, alice):
+    statements = []
+
+    def record(conn, cursor, statement, parameters, context, executemany):
+        statements.append(statement.split(None, 1)[0].upper())
+
+    engine = services.sessionmaker.kw["bind"].sync_engine
+    event.listen(engine, "before_cursor_execute", record)
+    try:
+        with pytest.raises(InvalidToken):
+            await tokens.refresh("not-a-token-we-ever-issued")
+    finally:
+        event.remove(engine, "before_cursor_execute", record)
+
+    assert statements
+    assert set(statements) == {"SELECT"}

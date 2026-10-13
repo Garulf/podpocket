@@ -81,6 +81,8 @@ class TokenService:
         now = self._clock()
         digest = _digest(refresh_token)
         fresh = secrets.token_urlsafe(32)
+        if not await self._is_known(digest):
+            raise InvalidToken("unknown refresh token")
         async with self._sessionmaker() as session:
             await session.execute(
                 update(RefreshTokenHash)
@@ -117,6 +119,14 @@ class TokenService:
             except IntegrityError as exc:
                 raise InvalidToken("signed out") from exc
         return user, self._issued(user.uuid, session_id, fresh, now)
+
+    async def _is_known(self, digest: str) -> bool:
+        async with self._sessionmaker() as session:
+            return (
+                await session.scalar(
+                    select(RefreshTokenHash.token_hash).where(RefreshTokenHash.token_hash == digest)
+                )
+            ) is not None
 
     async def _prune(self, session: AsyncSession, session_id: str, now: datetime) -> None:
         await session.execute(
