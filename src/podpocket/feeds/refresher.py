@@ -16,7 +16,7 @@ from podpocket.feeds.errors import FeedError
 from podpocket.feeds.fetch import FetchPolicy, FetchResult, fetch
 from podpocket.feeds.ingest import apply_feed
 from podpocket.feeds.parse import ParsedFeed, parse_feed
-from podpocket.models import Podcast, PodcastAlias
+from podpocket.models import Podcast, PodcastAlias, Subscription
 
 logger = logging.getLogger(__name__)
 
@@ -118,11 +118,15 @@ class FeedRefresher:
 
     async def refresh_due(self) -> int:
         now = self._clock()
+        subscribed = select(Subscription.podcast_uuid).where(Subscription.subscribed.is_(True))
         async with self._sessionmaker() as session:
             due = list(
                 await session.scalars(
                     select(Podcast.uuid).where(
-                        Podcast.last_requested_at >= now - ACTIVE_WINDOW,
+                        or_(
+                            Podcast.last_requested_at >= now - ACTIVE_WINDOW,
+                            Podcast.uuid.in_(subscribed),
+                        ),
                         or_(Podcast.next_refresh_at.is_(None), Podcast.next_refresh_at <= now),
                     )
                 )

@@ -12,7 +12,7 @@ from podpocket.feeds.errors import FeedError
 from podpocket.feeds.fetch import FetchPolicy
 from podpocket.feeds.refresher import FeedRefresher
 from podpocket.ids import episode_uuid, podcast_uuid
-from podpocket.models import Episode, Podcast
+from podpocket.models import Episode, Podcast, Subscription, User
 from tests.factories import FakeClock, item, rss
 
 FEED = "https://feeds.test/show.xml"
@@ -452,3 +452,56 @@ async def test_concurrent_first_hits_fetch_a_stub_once(respx_mock, refresher, se
 
     assert first.fetched_at is not None and second.fetched_at is not None
     assert route.call_count == 1
+
+
+async def add_subscriber(services, podcast_uuid, subscribed=True):
+    async with services.sessionmaker() as session:
+        if await session.get(User, "listener") is None:
+            session.add(
+                User(uuid="listener", username="listener", password_hash="x", created_at=START)
+            )
+            await session.flush()
+        session.add(
+            Subscription(user_uuid="listener", podcast_uuid=podcast_uuid, subscribed=subscribed)
+        )
+        await session.commit()
+
+
+async def test_refresh_due_includes_subscribed_podcasts(respx_mock, refresher, services):
+    followed_url = "https://feeds.test/followed"
+    dropped_url = "https://feeds.test/dropped"
+    await add_stubs(services, followed_url, dropped_url)
+    await add_subscriber(services, podcast_uuid(followed_url))
+    await add_subscriber(services, podcast_uuid(dropped_url), subscribed=False)
+    followed = respx_mock.get(followed_url).respond(200, content=rss(item()))
+
+    assert await refresher.refresh_due() == 1
+
+    assert followed.call_count == 1
+    assert (await load_podcast(services, podcast_uuid(followed_url))).fetched_at == START
+
+
+async def test_subscribed_stub_is_fetched_by_the_scheduler(respx_mock, refresher, services):
+    async with services.sessionmaker() as session:
+        session.add(Podcast(uuid=podcast_uuid(FEED), feed_url=FEED, title="From directory"))
+        await session.commit()
+    await add_subscriber(services, podcast_uuid(FEED))
+    respx_mock.get(FEED).respond(200, content=rss(item(), title="Real Title"))
+
+    await refresher.refresh_due()
+
+    podcast = await load_podcast(services, podcast_uuid(FEED))
+    assert (podcast.title, podcast.fetched_at) == ("Real Title", START)
+
+
+async def test_a_failing_subscribed_feed_still_backs_off(respx_mock, refresher, services, clock):
+    await add_stubs(services, FEED)
+    await add_subscriber(services, podcast_uuid(FEED))
+    route = respx_mock.get(FEED).respond(500)
+
+    assert await refresher.refresh_due() == 1
+    assert await refresher.refresh_due() == 0
+
+    assert route.call_count == 1
+    clock.advance(timedelta(minutes=61))
+    assert await refresher.refresh_due() == 1
