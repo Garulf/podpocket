@@ -15,6 +15,7 @@ from podpocket.feeds.fetch import GuardedNetworkBackend
 from podpocket.feeds.refresher import FeedRefresher
 from podpocket.migrate import alembic_config, upgrade_to_head
 from podpocket.models import Base
+from tests.conftest import LIFESPAN_TIMEOUT_SECONDS
 
 
 async def test_health_reports_ok(client):
@@ -138,7 +139,11 @@ def scheduler_probe(monkeypatch):
 async def test_scheduler_runs_during_lifespan_and_is_cancelled_on_exit(settings, scheduler_probe):
     application = create_app(settings.model_copy(update={"run_scheduler": True}))
 
-    async with LifespanManager(application):
+    async with LifespanManager(
+        application,
+        startup_timeout=LIFESPAN_TIMEOUT_SECONDS,
+        shutdown_timeout=LIFESPAN_TIMEOUT_SECONDS,
+    ):
         await asyncio.wait_for(scheduler_probe.started.wait(), timeout=5)
         assert scheduler_probe.cancelled is False
 
@@ -148,7 +153,11 @@ async def test_scheduler_runs_during_lifespan_and_is_cancelled_on_exit(settings,
 async def test_scheduler_does_not_run_when_disabled(settings, scheduler_probe):
     application = create_app(settings.model_copy(update={"run_scheduler": False}))
 
-    async with LifespanManager(application):
+    async with LifespanManager(
+        application,
+        startup_timeout=LIFESPAN_TIMEOUT_SECONDS,
+        shutdown_timeout=LIFESPAN_TIMEOUT_SECONDS,
+    ):
         await asyncio.sleep(0)
 
     assert scheduler_probe.calls == 0

@@ -10,6 +10,7 @@ from podpocket.config import Settings
 from tests.api import PASSWORD, sign_in
 
 TEST_SECRET_KEY = "k" * 48
+LIFESPAN_TIMEOUT_SECONDS = 60
 
 
 @pytest.fixture(autouse=True)
@@ -34,7 +35,11 @@ def settings(tmp_path):
 @pytest.fixture
 async def app(settings):
     application = create_app(settings)
-    async with LifespanManager(application):
+    async with LifespanManager(
+        application,
+        startup_timeout=LIFESPAN_TIMEOUT_SECONDS,
+        shutdown_timeout=LIFESPAN_TIMEOUT_SECONDS,
+    ):
         yield application
 
 
