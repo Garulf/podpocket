@@ -777,7 +777,7 @@ requires-dist = [
     { name = "httpcore", specifier = ">=1.0.9" },
     { name = "httpx", specifier = ">=0.28" },
     { name = "pillow", specifier = ">=12.3" },
-    { name = "protobuf", specifier = ">=7.36.2" },
+    { name = "protobuf", specifier = ">=7.36.2,<8" },
     { name = "pydantic-settings", specifier = ">=2.15" },
     { name = "pyjwt", specifier = ">=2.15.1" },
     { name = "python-multipart", specifier = ">=0.0.32" },
