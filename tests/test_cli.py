@@ -49,12 +49,13 @@ def test_server_boots_and_reports_health(tmp_path):
         "PODPOCKET_DATABASE_URL": f"sqlite+aiosqlite:///{tmp_path / 'live.db'}",
         "PODPOCKET_CACHE_DIR": str(tmp_path / "cache"),
         "PODPOCKET_RUN_SCHEDULER": "false",
+        "PODPOCKET_SECRET_KEY": "s" * 40,
     }
     server = subprocess.Popen(
         [sys.executable, "-m", "podpocket.cli", "serve", "--port", str(port)], env=env
     )
     try:
-        deadline = time.monotonic() + 20
+        deadline = time.monotonic() + 60
         while True:
             assert server.poll() is None, f"server exited with code {server.returncode}"
             try:

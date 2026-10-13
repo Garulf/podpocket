@@ -32,6 +32,8 @@ def _run_with_connection(connection) -> None:
 
 
 async def run_migrations_online() -> None:
+    # Keep SQLite foreign_keys off here: batch table rebuilds drop and recreate
+    # parent tables, which would cascade-delete child rows with enforcement on.
     engine = create_async_engine(_database_url())
     async with engine.connect() as connection:
         await connection.run_sync(_run_with_connection)

@@ -5,19 +5,22 @@ Self-hosted server for the Pod Pocket podcast app
 
 ## What it is
 
-Pod Pocket server is the self-hosted backend for the Pod Pocket Android app, a Pocket Casts fork. It ingests podcast feeds and serves the catalogue, search and Discover APIs the app expects. Accounts and sync arrive in a later release.
+Pod Pocket server is the self-hosted backend for the Pod Pocket Android app, a Pocket Casts fork. It ingests podcast feeds and serves the catalogue, search and Discover APIs the app expects. It also keeps each user's account and synced state: sign-in, subscriptions, playback progress, Up Next, folders, playlists, bookmarks and listening history.
 
 ## Running it
 
 ```sh
 docker run -p 8000:8000 \
   -e PODPOCKET_PUBLIC_URL=https://pod.example.com \
+  -e PODPOCKET_SECRET_KEY="$(openssl rand -hex 32)" \
   -v podpocket-data:/data \
   -v podpocket-cache:/cache \
   ghcr.io/garulf/podpocket:latest
 ```
 
 The container runs as uid 1000. Named volumes work as is, but a bind-mounted `/data` or `/cache` must be writable by that uid.
+
+Generate the secret key once and keep it, for example with `openssl rand -hex 32`. Any 32 or more random characters work. The example above only generates a key for that one run, so store the value you use and pass the same one every time you start the container. The key signs access tokens. If you change it, current access tokens stop working and each app renews its own with its refresh token, so nobody has to sign in again. To sign a user out, use `podpocket user passwd` or `podpocket user remove`.
 
 Put it behind a reverse proxy that terminates TLS. The server trusts the forwarded headers it receives, so do not expose port 8000 directly to the internet.
 
@@ -28,6 +31,9 @@ All settings are environment variables with the `PODPOCKET_` prefix.
 | Variable | Default | Description |
 | --- | --- | --- |
 | `PODPOCKET_PUBLIC_URL` | required | Externally reachable base URL. Absolute links in API responses are built from it. |
+| `PODPOCKET_SECRET_KEY` | required | Signs access tokens. At least 32 characters. |
+| `PODPOCKET_ACCESS_TOKEN_MINUTES` | `60` | How long an access token is valid, from 1 to 1440. The app renews it on its own. |
+| `PODPOCKET_MAX_CONCURRENT_LOGINS` | `4` | How many password checks may run at once, from 1 to 64. Further logins are turned away for a moment. |
 | `PODPOCKET_DATABASE_URL` | `sqlite+aiosqlite:////data/podpocket.db` | SQLAlchemy database URL. Migrations run on startup. |
 | `PODPOCKET_CACHE_DIR` | `/cache` | Where cached artwork is stored. |
 | `PODPOCKET_REGION` | `us` | Region used for Discover content. |
@@ -47,6 +53,28 @@ Each prefix replaces one Pocket Casts host, so the app only needs to be pointed 
 | `/refresh` | `refresh.pocketcasts.com` |
 | `/search` | `search.pocketcasts.com` |
 | `/static` | `static.pocketcasts.com` |
+| `/api` | `api.pocketcasts.com` |
+
+## Accounts
+
+There is no sign-up in the app. The administrator manages accounts with the `podpocket user` command inside the container:
+
+| Command | What it does |
+| --- | --- |
+| `docker exec -it <container> podpocket user add NAME --email EMAIL` | Creates an account. Add `--admin` to mark it as an administrator. |
+| `docker exec -it <container> podpocket user passwd NAME` | Sets a new password and signs every device of that user out. |
+| `docker exec -it <container> podpocket user remove NAME` | Deletes the account and all of its synced data. Its devices get a 401 and are signed out. Asks first unless you pass `--yes`. |
+| `docker exec -it <container> podpocket user list` | Lists accounts. |
+
+`user add` and `user passwd` ask for the password twice; with `--password-stdin` they read one line from standard input instead. In the app, the email field accepts either the username or the email.
+
+## Accounts and sync
+
+- Each device session keeps its own refresh token. A replaced token stays usable for 24 hours, so a device that missed the response to a renewal does not get signed out.
+- Change timestamps from devices are capped at the server's current time, so a device with a fast clock cannot win every merge.
+- The Up Next queue holds at most 10,000 episodes.
+- Validation errors never echo the request body back.
+- Logins are throttled: five wrong passwords for one username block it for 30 seconds, and only a few password checks run at once. A rate limit on `/api/user/login_pocket_casts` in your reverse proxy is still a good idea for a server on the open internet.
 
 ## Development
 
@@ -62,6 +90,7 @@ To run the server locally, keep its database and cache in the working directory:
 PODPOCKET_PUBLIC_URL=http://localhost:8000 \
 PODPOCKET_DATABASE_URL=sqlite+aiosqlite:///./dev.db \
 PODPOCKET_CACHE_DIR=./cache \
+PODPOCKET_SECRET_KEY=dev-only-dev-only-dev-only-dev-only \
 uv run podpocket serve
 ```
 
