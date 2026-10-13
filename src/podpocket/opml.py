@@ -41,19 +41,19 @@ class OpmlImports:
         return await self.poll(tokens)
 
     async def poll(self, tokens: list[str]) -> ImportBatch:
-        known = [token for token in tokens if token in self._jobs]
-        pending = [self._jobs[token][1] for token in known if not self._jobs[token][1].done()]
+        unique = list(dict.fromkeys(tokens))
+        tasks = {token: self._jobs[token][1] for token in unique if token in self._jobs}
+        pending = [task for task in tasks.values() if not task.done()]
         if pending:
             await asyncio.wait(pending, timeout=self._wait_seconds)
         uuids: list[str] = []
         waiting: list[str] = []
-        failed = len(tokens) - len(known)
-        for token in known:
-            task = self._jobs[token][1]
+        failed = len(unique) - len(tasks)
+        for token, task in tasks.items():
             if not task.done():
                 waiting.append(token)
                 continue
-            del self._jobs[token]
+            self._jobs.pop(token, None)
             if task.cancelled() or task.exception() is not None:
                 failed += 1
             else:

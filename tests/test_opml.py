@@ -63,3 +63,22 @@ async def test_concurrency_is_bounded():
 
     assert len(batch.uuids) == 10
     assert peak <= 3
+
+
+async def test_overlapping_polls_of_the_same_tokens_both_answer():
+    release = asyncio.Event()
+
+    async def resolve(url):
+        await release.wait()
+        return "late-uuid"
+
+    imports = OpmlImports(resolve, wait_seconds=0.1)
+    tokens = (await imports.start(["slow"])).poll_uuids
+
+    polls = asyncio.gather(imports.poll(tokens), imports.poll(tokens + tokens))
+    await asyncio.sleep(0)
+    release.set()
+    first, second = await polls
+
+    assert first.uuids == second.uuids == ["late-uuid"]
+    assert (first.failed, second.failed) == (0, 0)
