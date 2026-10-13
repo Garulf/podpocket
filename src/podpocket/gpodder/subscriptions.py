@@ -2,10 +2,9 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 
 from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from podpocket.catalog import find_podcast_by_url
+from podpocket.catalog import resolve_podcast_uuids
 from podpocket.gpodder.limits import MAX_URL_LENGTH
 from podpocket.ids import normalize_feed_url, podcast_uuid
 from podpocket.models import ChangeLog, Podcast, PodcastAlias, Subscription
@@ -82,35 +81,47 @@ def clean_upload(add: Iterable[str], remove: Iterable[str]) -> SubscriptionUploa
     return SubscriptionUpload(sorted(added), sorted(removed), update_urls)
 
 
-async def ensure_podcasts(sessionmaker: async_sessionmaker[AsyncSession], urls: list[str]) -> None:
-    for attempt in range(2):
-        async with sessionmaker() as session:
-            try:
-                for url in urls:
-                    if await find_podcast_by_url(session, url) is None:
-                        session.add(Podcast(uuid=podcast_uuid(url), feed_url=url))
-                        await session.flush()
-                await session.commit()
-                return
-            except IntegrityError:
-                if attempt:
-                    raise
+@dataclass(frozen=True)
+class SubscriptionPlan:
+    subscribe: list[str]
+    unsubscribe: list[str]
+    new_feeds: list[str]
 
 
-async def _resolve(session: AsyncSession, urls: list[str]) -> list[str]:
-    uuids: list[str] = []
-    for url in urls:
-        podcast = await find_podcast_by_url(session, url)
-        if podcast is not None:
-            uuids.append(podcast.uuid)
-    return uuids
-
-
-async def apply_subscription_upload(writer: ChangeWriter, upload: SubscriptionUpload) -> None:
-    added = await _resolve(writer.session, upload.add)
-    removed = await _resolve(writer.session, upload.remove)
-    if set(added) & set(removed):
+def _require_disjoint(subscribe: Iterable[str], unsubscribe: Iterable[str]) -> None:
+    if set(subscribe) & set(unsubscribe):
         raise AddedAndRemoved("a feed was both added and removed")
-    changes = [PodcastChange(podcast_uuid=uuid, subscribed=True) for uuid in added]
-    changes += [PodcastChange(podcast_uuid=uuid, subscribed=False) for uuid in removed]
+
+
+async def plan_subscription_upload(
+    session: AsyncSession, upload: SubscriptionUpload
+) -> SubscriptionPlan:
+    known = await resolve_podcast_uuids(session, [*upload.add, *upload.remove])
+    plan = SubscriptionPlan(
+        subscribe=sorted({known[url] for url in upload.add if url in known}),
+        unsubscribe=sorted({known[url] for url in upload.remove if url in known}),
+        new_feeds=[url for url in upload.add if url not in known],
+    )
+    _require_disjoint(
+        [*plan.subscribe, *(podcast_uuid(url) for url in plan.new_feeds)], plan.unsubscribe
+    )
+    return plan
+
+
+async def _create_podcasts(session: AsyncSession, urls: list[str]) -> list[str]:
+    known = await resolve_podcast_uuids(session, urls)
+    for url in urls:
+        if url not in known:
+            known[url] = podcast_uuid(url)
+            session.add(Podcast(uuid=known[url], feed_url=url))
+    await session.flush()
+    return [known[url] for url in urls]
+
+
+async def apply_subscription_plan(writer: ChangeWriter, plan: SubscriptionPlan) -> None:
+    created = await _create_podcasts(writer.session, plan.new_feeds)
+    subscribe = sorted({*plan.subscribe, *created})
+    _require_disjoint(subscribe, plan.unsubscribe)
+    changes = [PodcastChange(podcast_uuid=uuid, subscribed=True) for uuid in subscribe]
+    changes += [PodcastChange(podcast_uuid=uuid, subscribed=False) for uuid in plan.unsubscribe]
     await apply_podcast_changes(writer, changes)

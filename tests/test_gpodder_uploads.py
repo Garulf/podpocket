@@ -1,9 +1,12 @@
+import asyncio
 import logging
 from datetime import UTC, datetime
 
 import pytest
 from sqlalchemy import select
 
+from podpocket.gpodder import router
+from podpocket.ids import episode_uuid, podcast_uuid
 from podpocket.models import ChangeLog, Podcast, PodcastAlias
 from podpocket.timefmt import epoch_ms, now_ms
 from tests.gpodder import (
@@ -11,10 +14,16 @@ from tests.gpodder import (
     EPISODE_2,
     FEED,
     basic,
+    catalog_selects,
     episode_id,
     episode_state,
     ingest,
     post_actions,
+    seed_catalog,
+    seeded_feed,
+    seeded_guid,
+    seeded_url,
+    write_as,
 )
 from tests.records import episode_upload, sync_update
 
@@ -73,6 +82,40 @@ async def test_play_without_a_total_never_marks_played(client, services, respx_m
 
     state = await episode_state(services, alice.uuid, episode_id(show))
     assert (state.played_up_to, state.playing_status, state.duration) == (120, 2, None)
+
+
+@pytest.mark.parametrize(("position", "status"), [(3540, 3), (3597, 3), (3539, 2)])
+async def test_play_within_60_seconds_of_the_end_marks_played_like_music_assistant(
+    client, services, respx_mock, alice, position, status
+):
+    show = await ingest(respx_mock, services)
+
+    await post_actions(client, "alice", [play(position, total=3600)])
+
+    state = await episode_state(services, alice.uuid, episode_id(show))
+    assert (state.played_up_to, state.playing_status) == (position, status)
+
+
+@pytest.mark.parametrize(("position", "status"), [(3597, 3), (3000, 2)])
+async def test_play_without_a_total_is_judged_against_the_feed_duration(
+    client, services, respx_mock, alice, position, status
+):
+    show = await ingest(respx_mock, services)
+
+    await post_actions(client, "alice", [play(position, total=0)])
+
+    state = await episode_state(services, alice.uuid, episode_id(show))
+    assert (state.played_up_to, state.playing_status, state.duration) == (position, status, None)
+
+
+async def test_play_at_the_start_of_a_short_episode_is_not_played(
+    client, services, respx_mock, alice
+):
+    show = await ingest(respx_mock, services)
+
+    await post_actions(client, "alice", [play(0, total=45)])
+
+    assert (await episode_state(services, alice.uuid, episode_id(show))).playing_status == 2
 
 
 async def test_new_marks_unplayed(client, services, respx_mock, alice):
@@ -365,3 +408,108 @@ async def test_oversized_body_is_rejected(client, alice):
     response = await client.post("/api/2/episodes/alice.json", content=body, headers=basic("alice"))
 
     assert response.status_code == 413
+
+
+@pytest.fixture
+def receive_times(monkeypatch):
+    times = iter([1_700_000_000_450, 1_700_000_000_460])
+    monkeypatch.setattr(router, "now_ms", lambda: next(times))
+
+
+@pytest.mark.parametrize("timestamp", ["2023-11-14T22:13:20", 1_700_000_000])
+async def test_a_whole_second_in_the_current_second_is_stamped_with_the_receive_time(
+    client, services, respx_mock, alice, receive_times, timestamp
+):
+    show = await ingest(respx_mock, services)
+
+    await post_actions(client, "alice", [play(90, timestamp=timestamp)])
+
+    state = await episode_state(services, alice.uuid, episode_id(show))
+    assert state.played_up_to_modified == 1_700_000_000_450
+
+
+async def test_same_second_reports_are_ordered_by_arrival(
+    client, services, respx_mock, alice, receive_times
+):
+    show = await ingest(respx_mock, services)
+    stamp = "2023-11-14T22:13:20"
+
+    await post_actions(client, "alice", [play(998, timestamp=stamp)])
+    await post_actions(client, "alice", [play(1003, timestamp=stamp)])
+
+    state = await episode_state(services, alice.uuid, episode_id(show))
+    assert state.played_up_to == 1003
+
+
+async def test_a_whole_second_from_an_earlier_second_keeps_its_time(
+    client, services, respx_mock, alice, receive_times
+):
+    show = await ingest(respx_mock, services)
+
+    await post_actions(client, "alice", [play(90, timestamp="2023-11-14T22:13:19")])
+
+    state = await episode_state(services, alice.uuid, episode_id(show))
+    assert state.played_up_to_modified == 1_699_999_999_000
+
+
+def seeded_plays(feeds: int, episodes_per_feed: int = 2) -> list[dict]:
+    return [
+        play(
+            60 + feed,
+            episode=seeded_url(feed, position),
+            podcast=seeded_feed(feed),
+            guid=seeded_guid(feed, position),
+        )
+        for feed in range(feeds)
+        for position in range(episodes_per_feed)
+    ]
+
+
+async def test_a_large_upload_matches_with_a_handful_of_catalog_queries(client, services, alice):
+    await seed_catalog(services, feeds=500)
+
+    with catalog_selects(services) as selects:
+        response = await post_actions(client, "alice", seeded_plays(500))
+
+    assert response.status_code == 200
+    assert len(selects) <= 16
+    last = podcast_uuid(seeded_feed(499))
+    state = await episode_state(
+        services,
+        alice.uuid,
+        episode_uuid(last, seeded_guid(499, 1), seeded_url(499, 1)),
+    )
+    assert state.played_up_to == 60 + 499
+
+
+async def test_catalog_lookups_select_columns_only(client, services, alice):
+    await seed_catalog(services, feeds=3)
+
+    with catalog_selects(services) as selects:
+        await post_actions(client, "alice", seeded_plays(3))
+
+    episode_selects = [statement for statement in selects if "FROM episodes" in statement]
+    assert episode_selects
+    assert all("show_notes" not in statement for statement in episode_selects)
+
+
+async def test_a_large_upload_does_not_hold_the_write_lock_while_matching(
+    client, services, alice, bob, monkeypatch
+):
+    await seed_catalog(services, feeds=500)
+    matched_while_writing = []
+    match_actions = router.match_actions
+
+    async def match_then_let_bob_write(session, actions):
+        pairs = await match_actions(session, actions)
+        async with asyncio.timeout(30):
+            await write_as(services, bob, podcast_uuid(seeded_feed(0)))
+        matched_while_writing.append(len(pairs))
+        return pairs
+
+    monkeypatch.setattr(router, "match_actions", match_then_let_bob_write)
+
+    response = await post_actions(client, "alice", seeded_plays(500))
+
+    assert response.status_code == 200
+    assert matched_while_writing == [1000]

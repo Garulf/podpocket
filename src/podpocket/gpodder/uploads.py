@@ -1,4 +1,3 @@
-from collections import defaultdict
 from dataclasses import dataclass
 from typing import Annotated, Any
 
@@ -15,16 +14,17 @@ from pydantic import (
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from podpocket.catalog import find_podcast_by_url
+from podpocket.catalog import resolve_podcast_uuids
 from podpocket.gpodder.limits import MAX_URL_LENGTH, StorableText
 from podpocket.ids import normalize_feed_url
 from podpocket.models import Episode
 from podpocket.sync.episodes import COMPLETED, IN_PROGRESS, UNPLAYED, EpisodeChange, FieldUpdate
-from podpocket.sync.writer import INT32_MAX, KEY_CHUNK
+from podpocket.sync.writer import INT32_MAX, chunks
 from podpocket.timefmt import epoch_ms, parse_iso
 
 MAX_TIMESTAMP_LENGTH = 64
 LATEST_EPOCH_SECONDS = 253402300799
+FINISHED_TOLERANCE_SECONDS = 60
 
 Url = Annotated[StorableText, Field(max_length=MAX_URL_LENGTH)]
 Seconds = Annotated[float, Field(strict=True, ge=0, le=INT32_MAX, allow_inf_nan=False)]
@@ -93,10 +93,25 @@ def timestamp_ms(timestamp: str | int) -> int:
 
 
 def action_ms(timestamp: str | int | None, now_ms: int) -> int:
-    return now_ms if timestamp is None else timestamp_ms(timestamp)
+    if timestamp is None:
+        return now_ms
+    milliseconds = timestamp_ms(timestamp)
+    in_current_second = milliseconds % 1000 == 0 and milliseconds // 1000 == now_ms // 1000
+    return now_ms if in_current_second else milliseconds
 
 
-def episode_change(action: EpisodeAction, episode: Episode, now_ms: int) -> EpisodeChange:
+@dataclass(frozen=True)
+class EpisodeMatch:
+    uuid: str
+    podcast_uuid: str
+    duration: float
+
+
+def _finished(position: int, total: int) -> bool:
+    return position > 0 and total > 0 and position >= total - FINISHED_TOLERANCE_SECONDS
+
+
+def episode_change(action: EpisodeAction, episode: EpisodeMatch, now_ms: int) -> EpisodeChange:
     modified = action_ms(action.timestamp, now_ms)
     if action.kind == "new":
         return EpisodeChange(
@@ -107,7 +122,7 @@ def episode_change(action: EpisodeAction, episode: Episode, now_ms: int) -> Epis
         )
     position = int(action.position or 0)
     total = int(action.total or 0)
-    finished = total > 0 and position >= total
+    finished = _finished(position, total or int(episode.duration or 0))
     return EpisodeChange(
         episode_uuid=episode.uuid,
         podcast_uuid=episode.podcast_uuid,
@@ -124,67 +139,69 @@ def _feed_url(raw_url: str) -> str | None:
         return None
 
 
-async def _candidates(
-    session: AsyncSession, podcast_uuid: str, actions: list[EpisodeAction]
-) -> list[Episode]:
-    keys = sorted({key for action in actions for key in (action.guid, action.episode) if key})
-    found: list[Episode] = []
-    for start in range(0, len(keys), KEY_CHUNK):
-        chunk = keys[start : start + KEY_CHUNK]
-        found.extend(
-            await session.scalars(
-                select(Episode)
-                .where(
-                    Episode.podcast_uuid == podcast_uuid,
-                    or_(Episode.guid.in_(chunk), Episode.enclosure_url.in_(chunk)),
-                )
-                .order_by(Episode.published.desc(), Episode.uuid)
-            )
-        )
-    return found
-
-
 @dataclass(frozen=True)
 class EpisodeIndex:
-    by_guid: dict[str, Episode]
-    by_url: dict[str, Episode]
+    by_guid: dict[tuple[str, str], EpisodeMatch]
+    by_url: dict[tuple[str, str], EpisodeMatch]
 
-    def find(self, action: EpisodeAction) -> Episode | None:
-        found = self.by_guid.get(action.guid) if action.guid else None
-        return found or self.by_url.get(action.episode)
+    def find(self, podcast_uuid: str, action: EpisodeAction) -> EpisodeMatch | None:
+        found = self.by_guid.get((podcast_uuid, action.guid)) if action.guid else None
+        return found or self.by_url.get((podcast_uuid, action.episode))
 
 
-async def _index(session: AsyncSession, url: str, group: list[EpisodeAction]) -> EpisodeIndex:
+async def _index(session: AsyncSession, podcast_uuids: set[str], keys: set[str]) -> EpisodeIndex:
+    columns = (
+        Episode.uuid,
+        Episode.podcast_uuid,
+        Episode.guid,
+        Episode.enclosure_url,
+        Episode.duration,
+        Episode.published,
+    )
+    found = {}
+    for podcasts in chunks(sorted(podcast_uuids)):
+        for wanted in chunks(sorted(keys)):
+            rows = await session.execute(
+                select(*columns).where(
+                    Episode.podcast_uuid.in_(podcasts),
+                    or_(Episode.guid.in_(wanted), Episode.enclosure_url.in_(wanted)),
+                )
+            )
+            found.update((row.uuid, row) for row in rows)
     index = EpisodeIndex(by_guid={}, by_url={})
-    podcast = await find_podcast_by_url(session, url)
-    if podcast is None:
-        return index
-    for episode in await _candidates(session, podcast.uuid, group):
-        if episode.guid:
-            index.by_guid.setdefault(episode.guid, episode)
-        index.by_url.setdefault(episode.enclosure_url, episode)
+    by_uuid = sorted(found.values(), key=lambda row: row.uuid)
+    for row in sorted(by_uuid, key=lambda row: row.published, reverse=True):
+        match = EpisodeMatch(row.uuid, row.podcast_uuid, row.duration)
+        if row.guid:
+            index.by_guid.setdefault((row.podcast_uuid, row.guid), match)
+        index.by_url.setdefault((row.podcast_uuid, row.enclosure_url), match)
     return index
 
 
 async def match_actions(
     session: AsyncSession, actions: list[EpisodeAction]
-) -> list[tuple[EpisodeAction, Episode | None]]:
+) -> list[tuple[EpisodeAction, EpisodeMatch | None]]:
     feed_urls = [_feed_url(action.podcast) for action in actions]
-    groups: defaultdict[str, list[EpisodeAction]] = defaultdict(list)
-    for action, url in zip(actions, feed_urls, strict=True):
-        if url is not None:
-            groups[url].append(action)
-    indexes = {url: await _index(session, url, group) for url, group in groups.items()}
+    known = await resolve_podcast_uuids(session, {url for url in feed_urls if url is not None})
+    podcasts = [None if url is None else known.get(url) for url in feed_urls]
+    matched = [
+        (action, podcast) for action, podcast in zip(actions, podcasts, strict=True) if podcast
+    ]
+    index = await _index(
+        session,
+        {podcast for _, podcast in matched},
+        {key for action, _ in matched for key in (action.guid, action.episode) if key},
+    )
     return [
-        (action, indexes[url].find(action) if url is not None else None)
-        for action, url in zip(actions, feed_urls, strict=True)
+        (action, None if podcast is None else index.find(podcast, action))
+        for action, podcast in zip(actions, podcasts, strict=True)
     ]
 
 
 def plan_changes(
-    pairs: list[tuple[EpisodeAction, Episode | None]], now_ms: int, ignored: int
+    pairs: list[tuple[EpisodeAction, EpisodeMatch | None]], now_ms: int, ignored: int
 ) -> tuple[list[EpisodeChange], UploadReport]:
-    newest: dict[str, tuple[tuple[int, int], EpisodeAction, Episode]] = {}
+    newest: dict[str, tuple[tuple[int, int], EpisodeAction, EpisodeMatch]] = {}
     for order, (action, episode) in enumerate(pairs):
         if episode is None:
             continue

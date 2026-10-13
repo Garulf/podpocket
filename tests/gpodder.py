@@ -1,9 +1,15 @@
 import base64
+from contextlib import contextmanager
+from datetime import UTC, datetime
 
 import httpx
+from sqlalchemy import event
 
-from podpocket.ids import episode_uuid
-from podpocket.models import UserEpisodeState
+from podpocket.ids import episode_uuid, podcast_uuid
+from podpocket.models import Episode, Podcast, UserEpisodeState
+from podpocket.sync.podcasts import PodcastChange, apply_podcast_changes
+from podpocket.sync.writer import APP_SOURCE, ChangeWriter
+from podpocket.timefmt import now_ms
 from tests.api import PASSWORD
 from tests.factories import item, rss
 from tests.records import podcast_upload, sync_update
@@ -54,3 +60,67 @@ async def get_actions(client: httpx.AsyncClient, login: str, since: int = 0) -> 
     )
     assert response.status_code == 200, response.text
     return response.json()
+
+
+PUBLISHED = datetime(2026, 10, 1, 8, 0, tzinfo=UTC)
+
+
+def seeded_feed(number: int) -> str:
+    return f"https://feeds.test/seeded/{number}.xml"
+
+
+def seeded_guid(number: int, episode: int) -> str:
+    return f"seeded-{number}-{episode}"
+
+
+def seeded_url(number: int, episode: int) -> str:
+    return f"https://cdn.example.com/seeded/{number}/{episode}.mp3"
+
+
+async def seed_catalog(services, feeds: int, episodes_per_feed: int = 2) -> None:
+    async with services.sessionmaker() as session:
+        session.add_all(
+            Podcast(uuid=podcast_uuid(feed), feed_url=feed)
+            for feed in map(seeded_feed, range(feeds))
+        )
+        await session.flush()
+        for number in range(feeds):
+            feed = seeded_feed(number)
+            for position in range(episodes_per_feed):
+                guid, url = seeded_guid(number, position), seeded_url(number, position)
+                session.add(
+                    Episode(
+                        uuid=episode_uuid(podcast_uuid(feed), guid, url),
+                        podcast_uuid=podcast_uuid(feed),
+                        guid=guid,
+                        enclosure_url=url,
+                        published=PUBLISHED,
+                        first_seen_at=PUBLISHED,
+                    )
+                )
+        await session.commit()
+
+
+async def write_as(services, user, podcast: str) -> None:
+    async with services.sessionmaker() as session:
+        writer = await ChangeWriter.begin(session, user.uuid, source=APP_SOURCE, now_ms=now_ms())
+        await apply_podcast_changes(writer, [PodcastChange(podcast_uuid=podcast, subscribed=True)])
+        await session.commit()
+
+
+@contextmanager
+def catalog_selects(services):
+    statements: list[str] = []
+
+    def record(connection, cursor, statement, parameters, context, executemany) -> None:
+        if statement.lstrip().startswith("SELECT") and any(
+            f"FROM {table}" in statement for table in ("podcasts", "podcast_aliases", "episodes")
+        ):
+            statements.append(statement)
+
+    engine = services.sessionmaker.kw["bind"].sync_engine
+    event.listen(engine, "before_cursor_execute", record)
+    try:
+        yield statements
+    finally:
+        event.remove(engine, "before_cursor_execute", record)

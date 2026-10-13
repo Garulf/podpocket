@@ -1,5 +1,5 @@
 from collections import defaultdict
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator, Sequence
 from typing import Any, Self
 
 from sqlalchemy import select, update
@@ -19,6 +19,11 @@ BOOKMARK = "bookmark"
 KEY_CHUNK = 500
 MAX_CLOCK_SKEW_MS = 0
 MAX_DECLARED_DIGITS = 19
+
+
+def chunks[T](items: Sequence[T], size: int = KEY_CHUNK) -> Iterator[Sequence[T]]:
+    for start in range(0, len(items), size):
+        yield items[start : start + size]
 
 
 def is_clean_text(text: str) -> bool:
@@ -122,8 +127,7 @@ async def load_by_keys(
 ) -> list[Any]:
     ordered = sorted(set(keys))
     rows: list[Any] = []
-    for start in range(0, len(ordered), KEY_CHUNK):
-        chunk = ordered[start : start + KEY_CHUNK]
+    for chunk in chunks(ordered):
         rows.extend(
             await session.scalars(
                 select(model).where(model.user_uuid == user_uuid, key_column.in_(chunk))

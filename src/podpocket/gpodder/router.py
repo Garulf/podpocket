@@ -18,9 +18,9 @@ from podpocket.gpodder.limits import (
 )
 from podpocket.gpodder.subscriptions import (
     AddedAndRemoved,
-    apply_subscription_upload,
+    apply_subscription_plan,
     clean_upload,
-    ensure_podcasts,
+    plan_subscription_upload,
     subscription_delta,
 )
 from podpocket.gpodder.uploads import match_actions, parse_actions, plan_changes
@@ -91,17 +91,18 @@ async def upload_subscriptions(
     try:
         changes = SubscriptionChanges.model_validate(body)
         upload = clean_upload(changes.add, changes.remove)
+        async with services.sessionmaker() as session:
+            plan = await plan_subscription_upload(session, upload)
     except ValidationError as exc:
         raise HTTPException(status_code=400, detail="invalid subscription changes") from exc
     except AddedAndRemoved as exc:
         raise _conflict() from exc
-    await ensure_podcasts(services.sessionmaker, upload.add)
     async with services.sessionmaker() as session:
         writer = await ChangeWriter.begin(
             session, user.uuid, source=GPODDER_SOURCE, now_ms=now_ms()
         )
         try:
-            await apply_subscription_upload(writer, upload)
+            await apply_subscription_plan(writer, plan)
         except AddedAndRemoved as exc:
             raise _conflict() from exc
         cursor = writer.cursor
@@ -134,8 +135,10 @@ async def upload_episode_actions(
     actions, ignored = parse_actions(body)
     now = now_ms()
     async with services.sessionmaker() as session:
+        matched = await match_actions(session, actions)
+    changes, report = plan_changes(matched, now, ignored)
+    async with services.sessionmaker() as session:
         writer = await ChangeWriter.begin(session, user.uuid, source=GPODDER_SOURCE, now_ms=now)
-        changes, report = plan_changes(await match_actions(session, actions), now, ignored)
         await apply_episode_changes(writer, changes)
         cursor = writer.cursor
         await session.commit()

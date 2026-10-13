@@ -1,10 +1,22 @@
-import pytest
-from sqlalchemy import select
+import asyncio
 
+import pytest
+from sqlalchemy import func, select
+
+from podpocket.gpodder import router
 from podpocket.ids import podcast_uuid
 from podpocket.models import ChangeLog, Podcast, PodcastAlias, Subscription
 from tests.factories import item, rss
-from tests.gpodder import FEED, basic, ingest, subscribe
+from tests.gpodder import (
+    FEED,
+    basic,
+    catalog_selects,
+    ingest,
+    seed_catalog,
+    seeded_feed,
+    subscribe,
+    write_as,
+)
 from tests.records import records_of, sync_update
 
 SUBSCRIPTIONS = "/api/2/subscriptions/alice/any-device.json"
@@ -216,3 +228,57 @@ async def test_adding_the_new_url_and_removing_the_old_one_is_a_conflict(
     assert moved not in response.text
     async with services.sessionmaker() as session:
         assert (await session.get(Subscription, (alice.uuid, show))).subscribed is True
+
+
+async def test_a_rejected_upload_creates_no_stubs(client, services, respx_mock, alice, alice_auth):
+    show = await ingest(respx_mock, services)
+    moved = "https://feeds.test/moved.xml"
+    async with services.sessionmaker() as session:
+        podcast = await session.get(Podcast, show)
+        session.add(PodcastAlias(url=FEED, podcast_uuid=show))
+        podcast.feed_url = moved
+        await session.commit()
+    async with services.sessionmaker() as session:
+        before = await session.scalar(select(func.count()).select_from(Podcast))
+
+    response = await upload(client, add=[moved, "https://feeds.test/new.xml"], remove=[FEED])
+
+    assert response.status_code == 400
+    async with services.sessionmaker() as session:
+        assert await session.scalar(select(func.count()).select_from(Podcast)) == before
+
+
+async def test_a_large_upload_resolves_feeds_with_a_handful_of_queries(client, services, alice):
+    await seed_catalog(services, feeds=300, episodes_per_feed=0)
+    known = [seeded_feed(n) for n in range(300)]
+    new = [f"https://feeds.test/new/{n}.xml" for n in range(300)]
+
+    with catalog_selects(services) as selects:
+        response = await upload(client, add=[*known, *new], remove=[])
+
+    assert response.status_code == 200
+    assert len(selects) <= 16
+    async with services.sessionmaker() as session:
+        subscribed = await session.scalar(
+            select(func.count()).select_from(Subscription).where(Subscription.subscribed)
+        )
+    assert subscribed == 600
+
+
+async def test_resolving_feeds_does_not_hold_the_write_lock(
+    client, services, alice, bob, monkeypatch
+):
+    await seed_catalog(services, feeds=2, episodes_per_feed=0)
+    plan_subscription_upload = router.plan_subscription_upload
+
+    async def plan_then_let_bob_write(session, upload):
+        plan = await plan_subscription_upload(session, upload)
+        async with asyncio.timeout(30):
+            await write_as(services, bob, podcast_uuid(seeded_feed(0)))
+        return plan
+
+    monkeypatch.setattr(router, "plan_subscription_upload", plan_then_let_bob_write)
+
+    response = await upload(client, add=[seeded_feed(0), "https://feeds.test/new.xml"])
+
+    assert response.status_code == 200
