@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 import jwt
-from sqlalchemy import or_, select
+from sqlalchemy import or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from podpocket.models import RefreshToken, User
@@ -92,12 +92,19 @@ class TokenService:
             user = await session.get(User, row.user_uuid)
             if user is None:
                 raise InvalidToken("signed out")
+            session_id = row.id
+            rotation = {"token_hash": _digest(fresh)}
             if is_current:
-                row.previous_hash = digest
-            row.token_hash = _digest(fresh)
-            row.rotated_at = now
+                rotation |= {"previous_hash": digest, "rotated_at": now}
+            result = await session.execute(
+                update(RefreshToken)
+                .where(RefreshToken.id == session_id, RefreshToken.token_hash == row.token_hash)
+                .values(**rotation)
+            )
+            if result.rowcount == 0:
+                raise InvalidToken("signed out")
             await session.commit()
-        return user, self._issued(user.uuid, row.id, fresh, now)
+        return user, self._issued(user.uuid, session_id, fresh, now)
 
     async def authenticate(self, access_token: str) -> User:
         _require_plausible(access_token)

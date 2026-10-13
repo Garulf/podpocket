@@ -1,13 +1,16 @@
 from datetime import UTC, datetime, timedelta
 
 import httpx
+import jwt
 import pytest
 from fastapi import FastAPI
 from sqlalchemy import delete
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from podpocket.accounts.dependencies import CurrentUser
 from podpocket.accounts.tokens import InvalidToken, TokenService
-from podpocket.models import RefreshToken
+from podpocket.accounts.users import remove_user, set_password
+from podpocket.models import RefreshToken, User
 from tests.factories import FakeClock
 
 SECRET = "t" * 40
@@ -89,6 +92,38 @@ async def test_previous_refresh_token_stops_working_after_a_day(tokens, alice, c
         await tokens.refresh(first.refresh_token)
 
 
+async def test_previous_refresh_token_does_not_extend_its_own_grace(tokens, alice, clock):
+    first = await tokens.issue(alice, "mobile")
+    await tokens.refresh(first.refresh_token)
+
+    clock.advance(timedelta(hours=20))
+    await tokens.refresh(first.refresh_token)
+    clock.advance(timedelta(hours=10))
+
+    with pytest.raises(InvalidToken):
+        await tokens.refresh(first.refresh_token)
+
+
+async def test_refresh_that_loses_a_race_with_a_sign_out_is_rejected(services, alice, clock):
+    rival = services.sessionmaker
+
+    class SignsOutAfterUserLoad(AsyncSession):
+        async def get(self, entity, ident, **kwargs):
+            user = await super().get(entity, ident, **kwargs)
+            if entity is User:
+                async with rival() as other:
+                    await other.execute(delete(RefreshToken))
+                    await other.commit()
+            return user
+
+    racing = async_sessionmaker(rival.kw["bind"], class_=SignsOutAfterUserLoad)
+    tokens = TokenService(racing, SECRET, timedelta(hours=1), clock=clock)
+    issued = await tokens.issue(alice, "mobile")
+
+    with pytest.raises(InvalidToken, match="signed out"):
+        await tokens.refresh(issued.refresh_token)
+
+
 async def test_unknown_refresh_token_is_rejected(tokens):
     with pytest.raises(InvalidToken):
         await tokens.refresh("not-a-token")
@@ -161,3 +196,53 @@ async def test_current_user_answers_401_for_odd_bearer_tokens(guarded, token):
 
     assert response.status_code == 401
     assert response.headers["www-authenticate"] == "Bearer"
+
+
+async def test_password_change_revokes_access_and_refresh_tokens(tokens, services, alice):
+    issued = await tokens.issue(alice, "mobile")
+
+    await set_password(services.sessionmaker, "alice", "a brand new password")
+
+    with pytest.raises(InvalidToken):
+        await tokens.authenticate(issued.access_token)
+    with pytest.raises(InvalidToken):
+        await tokens.refresh(issued.refresh_token)
+
+
+async def test_removing_a_user_revokes_access_and_refresh_tokens(tokens, services, alice):
+    issued = await tokens.issue(alice, "mobile")
+
+    await remove_user(services.sessionmaker, "alice")
+
+    with pytest.raises(InvalidToken):
+        await tokens.authenticate(issued.access_token)
+    with pytest.raises(InvalidToken):
+        await tokens.refresh(issued.refresh_token)
+
+
+def forged_claims(issued, clock):
+    real = jwt.decode(
+        issued.access_token, SECRET, algorithms=["HS256"], options={"verify_exp": False}
+    )
+    return {**real, "exp": int(clock().timestamp()) + 3600}
+
+
+async def test_unsigned_access_token_is_rejected(tokens, alice, clock):
+    issued = await tokens.issue(alice, "mobile")
+    forged = jwt.encode(forged_claims(issued, clock), None, algorithm="none")
+
+    with pytest.raises(InvalidToken):
+        await tokens.authenticate(forged)
+
+
+async def test_access_token_signed_with_another_algorithm_is_rejected(services, alice, clock):
+    long_secret = "t" * 64
+    tokens = TokenService(services.sessionmaker, long_secret, timedelta(hours=1), clock=clock)
+    issued = await tokens.issue(alice, "mobile")
+    claims = jwt.decode(
+        issued.access_token, long_secret, algorithms=["HS256"], options={"verify_exp": False}
+    )
+    forged = jwt.encode(claims, long_secret, algorithm="HS512")
+
+    with pytest.raises(InvalidToken):
+        await tokens.authenticate(forged)
