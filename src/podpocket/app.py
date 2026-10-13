@@ -1,6 +1,6 @@
 import asyncio
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 
 import httpx
 from fastapi import FastAPI
@@ -8,8 +8,16 @@ from fastapi import FastAPI
 from podpocket import health
 from podpocket.config import USER_AGENT, Settings
 from podpocket.db import create_engine, create_sessionmaker
+from podpocket.feeds.fetch import guarded_transport
 from podpocket.migrate import upgrade_to_head
 from podpocket.services import build_services
+
+
+def build_http_client(settings: Settings) -> httpx.AsyncClient:
+    headers = {"User-Agent": USER_AGENT}
+    if settings.allow_private_feeds:
+        return httpx.AsyncClient(headers=headers, follow_redirects=False)
+    return httpx.AsyncClient(headers=headers, transport=guarded_transport(), follow_redirects=False)
 
 
 def create_app(settings: Settings) -> FastAPI:
@@ -17,11 +25,21 @@ def create_app(settings: Settings) -> FastAPI:
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await asyncio.to_thread(upgrade_to_head, settings.database_url)
         engine = create_engine(settings.database_url)
-        async with httpx.AsyncClient(headers={"User-Agent": USER_AGENT}) as http:
-            app.state.services = build_services(settings, create_sessionmaker(engine), http)
+        async with build_http_client(settings) as http:
+            services = build_services(settings, create_sessionmaker(engine), http)
+            app.state.services = services
+            scheduler = (
+                asyncio.create_task(services.refresher.run_forever())
+                if settings.run_scheduler
+                else None
+            )
             try:
                 yield
             finally:
+                if scheduler is not None:
+                    scheduler.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await scheduler
                 await engine.dispose()
 
     app = FastAPI(title="Pod Pocket", lifespan=lifespan)

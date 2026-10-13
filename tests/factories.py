@@ -1,3 +1,5 @@
+from datetime import datetime, timedelta
+
 NAMESPACES = (
     'xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd" '
     'xmlns:podcast="https://podcastindex.org/namespace/1.0" '
@@ -30,3 +32,14 @@ def item(
         parts.append(f"<pubDate>{published}</pubDate>")
     parts.append(extra)
     return f"<item>{''.join(parts)}</item>"
+
+
+class FakeClock:
+    def __init__(self, start: datetime):
+        self.now = start
+
+    def __call__(self) -> datetime:
+        return self.now
+
+    def advance(self, delta: timedelta) -> None:
+        self.now += delta
