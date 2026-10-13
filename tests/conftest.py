@@ -1,11 +1,22 @@
 import httpx
 import pytest
+from argon2 import PasswordHasher
 from asgi_lifespan import LifespanManager
 
+from podpocket.accounts import passwords
+from podpocket.accounts.users import create_user
 from podpocket.app import create_app
 from podpocket.config import Settings
+from tests.api import PASSWORD
 
 TEST_SECRET_KEY = "k" * 48
+
+
+@pytest.fixture(autouse=True)
+def fast_password_hashing(monkeypatch):
+    monkeypatch.setattr(
+        passwords, "HASHER", PasswordHasher(time_cost=1, memory_cost=8, parallelism=1)
+    )
 
 
 @pytest.fixture
@@ -37,3 +48,13 @@ async def client(app):
 @pytest.fixture
 def services(app):
     return app.state.services
+
+
+@pytest.fixture
+async def alice(services):
+    return await create_user(services.sessionmaker, "alice", PASSWORD, email="alice@example.com")
+
+
+@pytest.fixture
+async def bob(services):
+    return await create_user(services.sessionmaker, "bob", PASSWORD)
