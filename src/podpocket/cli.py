@@ -12,6 +12,10 @@ from podpocket.migrate import upgrade_to_head
 from podpocket.timefmt import iso_z
 
 
+class Aborted(Exception):
+    pass
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.command == "serve":
@@ -53,14 +57,14 @@ def build_parser() -> argparse.ArgumentParser:
 def run_user_command(args: argparse.Namespace) -> int:
     try:
         password = read_password(args) if args.action in ("add", "passwd") else None
-        if args.action == "remove" and not args.yes and not confirm_removal(args.username):
-            print("aborted")
-            return 1
         database_url = DatabaseSettings().database_url
         upgrade_to_head(database_url)
         asyncio.run(user_command(args, database_url, password))
     except users.UserError as exc:
         print(f"error: {exc}", file=sys.stderr)
+        return 1
+    except (Aborted, EOFError, KeyboardInterrupt):
+        print("aborted", file=sys.stderr)
         return 1
     return 0
 
@@ -97,6 +101,9 @@ async def user_command(args: argparse.Namespace, database_url: str, password: st
                 user = await users.set_password(sessionmaker, args.username, password or "")
                 print(f"changed the password of {user.username} and signed out every device")
             case "remove":
+                target = await users.get_user(sessionmaker, args.username)
+                if not args.yes and not confirm_removal(target.username):
+                    raise Aborted
                 user = await users.remove_user(sessionmaker, args.username)
                 print(f"removed {user.username}")
             case "list":

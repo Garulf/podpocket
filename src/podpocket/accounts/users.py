@@ -5,7 +5,12 @@ from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from podpocket.accounts.passwords import hash_password, verify_password
+from podpocket.accounts.passwords import (
+    hash_password,
+    needs_rehash,
+    spend_verification_time,
+    verify_password,
+)
 from podpocket.models import RefreshToken, User
 from podpocket.timefmt import epoch_ms
 
@@ -66,11 +71,28 @@ async def create_user(
 
 
 async def authenticate(sessionmaker: Sessionmaker, login: str, password: str) -> User | None:
+    if not (_is_utf8_encodable(login) and _is_utf8_encodable(password)):
+        await spend_verification_time("")
+        return None
     async with sessionmaker() as session:
         user = await find_user(session, login)
-    if user is None or not await verify_password(user.password_hash, password):
-        return None
+        if user is None:
+            await spend_verification_time(password)
+            return None
+        if not await verify_password(user.password_hash, password):
+            return None
+        if needs_rehash(user.password_hash):
+            user.password_hash = await hash_password(password)
+            await session.commit()
     return user
+
+
+def _is_utf8_encodable(value: str) -> bool:
+    try:
+        value.encode()
+    except UnicodeEncodeError:
+        return False
+    return True
 
 
 async def set_password(sessionmaker: Sessionmaker, login: str, password: str) -> User:
@@ -83,6 +105,11 @@ async def set_password(sessionmaker: Sessionmaker, login: str, password: str) ->
         await session.execute(delete(RefreshToken).where(RefreshToken.user_uuid == user.uuid))
         await session.commit()
     return user
+
+
+async def get_user(sessionmaker: Sessionmaker, login: str) -> User:
+    async with sessionmaker() as session:
+        return await _require(session, login)
 
 
 async def remove_user(sessionmaker: Sessionmaker, login: str) -> User:

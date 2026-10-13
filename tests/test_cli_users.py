@@ -102,3 +102,50 @@ def test_remove_asks_for_confirmation(database, monkeypatch):
 
     assert run(["user", "remove", "alice", "--yes"], monkeypatch) == 0
     assert not login_works(database, "alice", "pw")
+
+
+def raises(error):
+    def fail(prompt=""):
+        raise error
+
+    return fail
+
+
+@pytest.mark.parametrize("error", [EOFError, KeyboardInterrupt])
+def test_interrupted_password_prompt_aborts_cleanly(database, monkeypatch, capsys, error):
+    monkeypatch.setattr(cli.getpass, "getpass", raises(error))
+
+    assert run(["user", "add", "carol"], monkeypatch) == 1
+
+    assert "aborted" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("error", [EOFError, KeyboardInterrupt])
+def test_interrupted_confirmation_aborts_cleanly(database, monkeypatch, capsys, error):
+    run(["user", "add", "alice", "--password-stdin"], monkeypatch, "pw\n")
+    monkeypatch.setattr("builtins.input", raises(error))
+
+    assert run(["user", "remove", "alice"], monkeypatch) == 1
+
+    assert "aborted" in capsys.readouterr().err
+    assert login_works(database, "alice", "pw")
+
+
+def test_declined_confirmation_reports_on_stderr(database, monkeypatch, capsys):
+    run(["user", "add", "alice", "--password-stdin"], monkeypatch, "pw\n")
+    capsys.readouterr()
+    monkeypatch.setattr("builtins.input", lambda prompt="": "n")
+
+    assert run(["user", "remove", "alice"], monkeypatch) == 1
+
+    captured = capsys.readouterr()
+    assert "aborted" in captured.err
+    assert "aborted" not in captured.out
+
+
+def test_removing_a_missing_user_does_not_prompt(database, monkeypatch, capsys):
+    monkeypatch.setattr("builtins.input", raises(AssertionError("must not prompt")))
+
+    assert run(["user", "remove", "ghost"], monkeypatch) == 1
+
+    assert "no user named 'ghost'" in capsys.readouterr().err
