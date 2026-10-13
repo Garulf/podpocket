@@ -21,6 +21,16 @@ MAX_CLOCK_SKEW_MS = 0
 MAX_DECLARED_DIGITS = 19
 
 
+def is_clean_text(text: str) -> bool:
+    if "\x00" in text:
+        return False
+    try:
+        text.encode()
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
 def parse_decimal_ms(text: str) -> int | None:
     if not (text.isascii() and text.isdigit() and len(text) <= MAX_DECLARED_DIGITS):
         return None
