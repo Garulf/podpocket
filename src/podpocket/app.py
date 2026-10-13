@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager, suppress
 
 import httpx
 from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from podpocket import health
@@ -36,6 +37,26 @@ async def account_gone(request: Request, exc: UserGone) -> JSONResponse:
     return JSONResponse({"detail": "account no longer exists"}, status_code=401, headers=CHALLENGE)
 
 
+def _printable(value: object) -> str:
+    return str(value).encode("utf-8", "backslashreplace").decode()
+
+
+def _error_location(location: tuple[int | str, ...]) -> list[int | str]:
+    return [part if isinstance(part, int) else _printable(part) for part in location]
+
+
+async def invalid_request(request: Request, exc: RequestValidationError) -> JSONResponse:
+    errors = [
+        {
+            "loc": _error_location(error["loc"]),
+            "msg": _printable(error["msg"]),
+            "type": _printable(error["type"]),
+        }
+        for error in exc.errors()
+    ]
+    return JSONResponse({"detail": errors}, status_code=422)
+
+
 def create_app(settings: Settings) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -60,6 +81,7 @@ def create_app(settings: Settings) -> FastAPI:
 
     app = FastAPI(title="Pod Pocket", lifespan=lifespan)
     app.add_exception_handler(UserGone, account_gone)
+    app.add_exception_handler(RequestValidationError, invalid_request)
     app.add_middleware(BodySizeLimit, max_bytes=MAX_REQUEST_BYTES)
     app.include_router(health.router)
     app.include_router(cache.router)

@@ -8,6 +8,8 @@ from podpocket.models import NamedSetting
 from podpocket.sync.writer import INT64_MAX, INT64_MIN, is_clean_text, lock_user
 
 MAX_NAME_LENGTH = 64
+MAX_SETTINGS = 500
+MAX_TEXT_LENGTH = 8192
 SCALARS = (bool, int, float, str)
 
 
@@ -27,6 +29,8 @@ async def update_named_settings(
             continue
         row = rows.get(name)
         if row is None:
+            if len(rows) >= MAX_SETTINGS:
+                continue
             row = NamedSetting(user_uuid=user_uuid, name=name)
             session.add(row)
             rows[name] = row
@@ -48,4 +52,4 @@ def _storable(name: str, value: Any) -> bool:
         return math.isfinite(value)
     if isinstance(value, int):
         return INT64_MIN <= value <= INT64_MAX
-    return is_clean_text(value)
+    return len(value) <= MAX_TEXT_LENGTH and is_clean_text(value)

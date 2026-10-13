@@ -91,8 +91,8 @@ async def history_year(
     body: HistoryYearBody, user: CurrentUser, services: ServicesDep
 ) -> dict[str, Any]:
     async with services.sessionmaker() as session:
-        entries = await history_for_year(session, user.uuid, body.year)
         stored = await session.get(User, user.uuid, populate_existing=True)
+        entries = await history_for_year(session, user.uuid, body.year)
     if body.count:
         return {"count": len(entries)}
     return {

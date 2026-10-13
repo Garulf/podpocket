@@ -203,3 +203,82 @@ async def test_a_device_id_that_cannot_exist_excludes_nothing(client, alice_auth
 
 async def test_stats_need_a_token(client):
     assert (await client.post(STATS, json={"deviceId": "phone"})).status_code == 401
+
+
+RAW_JSON = {"Content-Type": "application/json"}
+
+
+@pytest.mark.parametrize(
+    ("path", "body"),
+    [
+        (NAMED, b'{"v": "\\ud800"}'),
+        (NAMED, b'{"settings": "\\ud800"}'),
+        (STATS, b'{"deviceType": "\\ud800"}'),
+        (STATS, b'{"deviceId": 5, "deviceType": "\\ud800"}'),
+        ("/api/user/login_pocket_casts", b'{"email": 5, "password": "\\ud800"}'),
+        ("/cache/episode/search", b'{"term": 7, "x": "\\ud800"}'),
+    ],
+    ids=["named-v", "named-settings", "stats-type", "stats-id-and-type", "login", "cache-search"],
+)
+async def test_validation_errors_never_echo_the_input(client, alice_auth, path, body):
+    response = await client.post(path, content=body, headers={**alice_auth, **RAW_JSON})
+
+    assert response.status_code == 422
+    assert "ud800" not in response.text.lower()
+    assert all(set(error) == {"loc", "msg", "type"} for error in response.json()["detail"])
+
+
+async def test_a_surrogate_in_an_error_location_is_escaped(client, alice_auth):
+    body = b'{"deviceId": {"\\ud800": 1}}'
+
+    response = await client.post(STATS, content=body, headers={**alice_auth, **RAW_JSON})
+
+    assert response.status_code == 422
+
+
+async def test_at_most_500_settings_are_stored_per_user(client, alice_auth):
+    first = {f"s{index:03d}": index for index in range(500)}
+    await client.post(NAMED, json=settings_body(**first), headers=alice_auth)
+
+    response = await client.post(NAMED, json=settings_body(extra=1, s000=99), headers=alice_auth)
+
+    stored = response.json()
+    assert len(stored) == 500
+    assert "extra" not in stored
+    assert stored["s000"] == {"value": 99, "changed": False}
+
+
+async def test_strings_over_8192_characters_are_ignored(client, alice_auth):
+    response = await client.post(
+        NAMED, json=settings_body(long="x" * 8193, edge="y" * 8192), headers=alice_auth
+    )
+
+    assert response.json() == {"edge": {"value": "y" * 8192, "changed": False}}
+
+
+async def test_a_finite_float_round_trips(client, alice_auth):
+    response = await client.post(NAMED, json=settings_body(speed=1.25), headers=alice_auth)
+
+    assert response.json() == {"speed": {"value": 1.25, "changed": False}}
+
+
+async def test_the_earliest_start_across_devices_is_reported(client, alice_auth):
+    await sync_update(
+        client,
+        alice_auth,
+        device_upload("a", listened=1, started_at=1_700_000_000),
+        device_upload("b", listened=1, started_at=1_600_000_000),
+        device_upload("c", listened=1, started_at=1_650_000_000),
+    )
+
+    response = await client.post(STATS, json={"deviceId": "phone"}, headers=alice_auth)
+
+    assert response.json()["timesStartedAt"] == "2020-09-13T12:26:40Z"
+
+
+async def test_a_start_time_of_zero_is_left_out(client, alice_auth):
+    await sync_update(client, alice_auth, device_upload("a", listened=1, started_at=0))
+
+    response = await client.post(STATS, json={"deviceId": "phone"}, headers=alice_auth)
+
+    assert "timesStartedAt" not in response.json()
