@@ -41,6 +41,7 @@ testpaths = ["tests"]
 line-length = 100
 target-version = "py313"
 extend-exclude = ["src/podpocket/migrations/versions"]
+force-exclude = true
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
