@@ -91,3 +91,16 @@ def episode_search_result(episode: Episode, podcast: Podcast) -> dict[str, Any]:
         "podcast_uuid": podcast.uuid,
         "podcast_title": podcast.title,
     }
+
+
+def combined_episode(episode: Episode, podcast: Podcast) -> dict[str, Any]:
+    return {
+        "type": "episode",
+        "uuid": episode.uuid,
+        "title": episode.title,
+        "published_date": iso_z(episode.published),
+        "url": episode.enclosure_url,
+        "duration": round(episode.duration),
+        "podcast_uuid": podcast.uuid,
+        "podcast_title": podcast.title,
+    }

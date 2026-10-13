@@ -1,6 +1,12 @@
-from sqlalchemy import or_, select
-from sqlalchemy.ext.asyncio import AsyncSession
+from collections.abc import Iterable
+from dataclasses import dataclass
 
+from sqlalchemy import or_, select
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from podpocket.directory.itunes import DirectoryPodcast
+from podpocket.ids import normalize_feed_url, podcast_uuid
 from podpocket.models import Episode, Podcast, PodcastAlias
 
 
@@ -56,3 +62,62 @@ async def search_episodes(
     if podcast_uuid is not None:
         query = query.where(Episode.podcast_uuid == podcast_uuid)
     return [(episode, podcast) for episode, podcast in (await session.execute(query)).all()]
+
+
+@dataclass(frozen=True)
+class PodcastSummary:
+    uuid: str
+    title: str
+    author: str
+
+
+async def search_podcasts(session: AsyncSession, term: str, limit: int = 10) -> list[Podcast]:
+    return list(
+        await session.scalars(
+            select(Podcast)
+            .where(
+                Podcast.fetched_at.is_not(None),
+                or_(contains(Podcast.title, term), contains(Podcast.author, term)),
+            )
+            .order_by(Podcast.title)
+            .limit(limit)
+        )
+    )
+
+
+async def upsert_stubs(session: AsyncSession, items: Iterable[DirectoryPodcast]) -> list[Podcast]:
+    podcasts: dict[str, Podcast] = {}
+    for found in items:
+        try:
+            url = normalize_feed_url(found.feed_url)
+        except ValueError:
+            continue
+        podcast = await find_podcast_by_url(session, url)
+        if podcast is None:
+            podcast = Podcast(uuid=podcast_uuid(url), feed_url=url)
+            session.add(podcast)
+        if podcast.fetched_at is None:
+            podcast.title = found.title
+            podcast.author = found.author
+            podcast.artwork_url = found.artwork_url
+            podcast.category = found.category
+        podcasts.setdefault(podcast.uuid, podcast)
+    await session.flush()
+    return list(podcasts.values())
+
+
+async def save_stubs(
+    sessionmaker: async_sessionmaker[AsyncSession], items: Iterable[DirectoryPodcast]
+) -> list[PodcastSummary]:
+    items = list(items)
+    for attempt in range(2):
+        async with sessionmaker() as session:
+            try:
+                podcasts = await upsert_stubs(session, items)
+                summaries = [PodcastSummary(p.uuid, p.title, p.author) for p in podcasts]
+                await session.commit()
+                return summaries
+            except IntegrityError:
+                if attempt:
+                    raise
+    return []

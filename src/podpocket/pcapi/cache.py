@@ -5,6 +5,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel
 
 from podpocket import catalog
+from podpocket.discovery import find_podcasts
 from podpocket.feeds.errors import FeedError
 from podpocket.models import Podcast
 from podpocket.pcapi import serializers
@@ -94,5 +95,24 @@ async def search_all_episodes(body: TermSearch, services: ServicesDep) -> dict:
     return {
         "episodes": [
             serializers.episode_search_result(episode, podcast) for episode, podcast in matches
+        ]
+    }
+
+
+@router.post("/v2/search/combined")
+async def combined_search(body: TermSearch, services: ServicesDep) -> dict:
+    term = body.term.strip()
+    if not term:
+        return {"results": []}
+    podcasts = await find_podcasts(services, term, directory_limit=20)
+    async with services.sessionmaker() as session:
+        episodes = await catalog.search_episodes(session, term, limit=20)
+    return {
+        "results": [
+            *(
+                {"type": "podcast", "uuid": p.uuid, "title": p.title, "author": p.author}
+                for p in podcasts
+            ),
+            *(serializers.combined_episode(episode, podcast) for episode, podcast in episodes),
         ]
     }

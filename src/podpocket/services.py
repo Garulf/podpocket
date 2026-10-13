@@ -6,6 +6,7 @@ from fastapi import Request
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from podpocket.config import Settings
+from podpocket.directory.itunes import ITunesDirectory
 from podpocket.feeds.fetch import FetchPolicy
 from podpocket.feeds.refresher import FeedRefresher
 
@@ -16,6 +17,7 @@ class Services:
     sessionmaker: async_sessionmaker[AsyncSession]
     http: httpx.AsyncClient
     refresher: FeedRefresher
+    directory: ITunesDirectory
 
 
 def build_services(
@@ -33,6 +35,7 @@ def build_services(
         refresher=FeedRefresher(
             sessionmaker, http, feed_policy, timedelta(minutes=settings.refresh_interval_minutes)
         ),
+        directory=ITunesDirectory(http, settings.region),
     )
 
 
