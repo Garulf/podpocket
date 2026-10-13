@@ -32,7 +32,8 @@ All settings are environment variables with the `PODPOCKET_` prefix.
 | --- | --- | --- |
 | `PODPOCKET_PUBLIC_URL` | required | Externally reachable base URL. Absolute links in API responses are built from it. |
 | `PODPOCKET_SECRET_KEY` | required | Signs access tokens. At least 32 characters. |
-| `PODPOCKET_ACCESS_TOKEN_MINUTES` | `60` | How long an access token is valid. The app renews it on its own. |
+| `PODPOCKET_ACCESS_TOKEN_MINUTES` | `60` | How long an access token is valid, from 1 to 1440. The app renews it on its own. |
+| `PODPOCKET_MAX_CONCURRENT_LOGINS` | `4` | How many password checks may run at once, from 1 to 64. Further logins are turned away for a moment. |
 | `PODPOCKET_DATABASE_URL` | `sqlite+aiosqlite:////data/podpocket.db` | SQLAlchemy database URL. Migrations run on startup. |
 | `PODPOCKET_CACHE_DIR` | `/cache` | Where cached artwork is stored. |
 | `PODPOCKET_REGION` | `us` | Region used for Discover content. |
@@ -73,6 +74,7 @@ There is no sign-up in the app. The administrator manages accounts with the `pod
 - Change timestamps from devices are capped at the server's current time, so a device with a fast clock cannot win every merge.
 - The Up Next queue holds at most 10,000 episodes.
 - Validation errors never echo the request body back.
+- Logins are throttled: five wrong passwords for one username block it for 30 seconds, and only a few password checks run at once. A rate limit on `/api/user/login_pocket_casts` in your reverse proxy is still a good idea for a server on the open internet.
 
 ## Development
 
