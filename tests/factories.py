@@ -1,7 +1,8 @@
 NAMESPACES = (
     'xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd" '
     'xmlns:podcast="https://podcastindex.org/namespace/1.0" '
-    'xmlns:content="http://purl.org/rss/1.0/modules/content/"'
+    'xmlns:content="http://purl.org/rss/1.0/modules/content/" '
+    'xmlns:dc="http://purl.org/dc/elements/1.1/"'
 )
 
 

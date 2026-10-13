@@ -120,6 +120,10 @@ def test_rejects_non_feeds(content):
         ("", 0.0),
         (None, 0.0),
         ("abc", 0.0),
+        ("nan", 0.0),
+        ("inf", 0.0),
+        ("-5", 0.0),
+        ("1:-02:03", 0.0),
     ],
 )
 def test_parse_duration(raw, seconds):
@@ -128,3 +132,65 @@ def test_parse_duration(raw, seconds):
 
 def test_plain_text_strips_tags_and_entities():
     assert plain_text("<p>Fish &amp;\n <b>chips</b></p>") == "Fish & chips"
+
+
+@pytest.mark.parametrize("url", ["   ", "\n", ""])
+def test_blank_enclosure_url_drops_the_item(url):
+    feed = parse_feed(
+        rss(item(guid="blank", url=None, extra=f'<enclosure url="{url}" type="audio/mpeg"/>'))
+    )
+
+    assert feed.episodes == []
+
+
+def test_enclosure_url_is_stripped():
+    episode = parse_feed(rss(item(url="  https://x/a.mp3\n"))).episodes[0]
+
+    assert episode.enclosure_url == "https://x/a.mp3"
+
+
+def test_blank_and_padded_urls_are_tidied():
+    episode = parse_feed(
+        rss(
+            item(
+                extra="""
+<itunes:image href="  "/>
+<podcast:chapters url=" https://example.com/c.json "/>
+<podcast:transcript url="  " type="text/vtt"/>
+<podcast:transcript url=" https://example.com/t.vtt " type="text/vtt"/>
+"""
+            )
+        )
+    ).episodes[0]
+
+    assert episode.image_url is None
+    assert episode.chapters_url == "https://example.com/c.json"
+    assert [t["url"] for t in episode.transcripts] == ["https://example.com/t.vtt"]
+
+
+def test_negative_file_size_is_clamped_to_zero():
+    episode = parse_feed(
+        rss(
+            item(url=None, extra='<enclosure url="https://x/a.mp3" length="-1" type="audio/mpeg"/>')
+        )
+    ).episodes[0]
+
+    assert episode.file_size == 0
+
+
+def test_empty_content_encoded_falls_back_to_summary():
+    episode = parse_feed(
+        rss(
+            item(extra="<description>Summary text</description><content:encoded></content:encoded>")
+        )
+    ).episodes[0]
+
+    assert episode.show_notes == "Summary text"
+
+
+def test_published_falls_back_to_updated():
+    episode = parse_feed(
+        rss(item(published=None, extra="<dc:date>2026-10-01T00:00:00Z</dc:date>"))
+    ).episodes[0]
+
+    assert episode.published == datetime(2026, 10, 1, tzinfo=UTC)

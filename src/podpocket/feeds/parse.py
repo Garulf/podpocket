@@ -1,5 +1,6 @@
 import calendar
 import html
+import math
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -77,6 +78,8 @@ def parse_duration(raw: Any) -> float:
         parts = [float(part) for part in str(raw).strip().split(":")]
     except ValueError:
         return 0.0
+    if not all(math.isfinite(part) and part >= 0 for part in parts):
+        return 0.0
     seconds = 0.0
     for part in parts:
         seconds = seconds * 60 + part
@@ -88,23 +91,25 @@ def plain_text(markup: str) -> str:
 
 
 def _parse_entry(entry: Any) -> ParsedEpisode | None:
-    enclosure = next((link for link in entry.get("enclosures", []) if link.get("href")), None)
+    enclosure = next(
+        (link for link in entry.get("enclosures", []) if _clean(link.get("href"))), None
+    )
     if enclosure is None:
         return None
-    content = entry.get("content") or []
+    content_value = (entry.get("content") or [{}])[0].get("value", "")
     episode_type = str(entry.get("itunes_episodetype", "full")).lower()
     return ParsedEpisode(
         guid=entry.get("id") or None,
         title=entry.get("title", ""),
-        enclosure_url=enclosure["href"],
+        enclosure_url=_clean(enclosure["href"]) or "",
         file_type=enclosure.get("type", ""),
-        file_size=_integer(enclosure.get("length")) or 0,
+        file_size=max(_integer(enclosure.get("length")) or 0, 0),
         duration=parse_duration(entry.get("itunes_duration")),
         published=_published(entry),
         season=_integer(entry.get("itunes_season")),
         number=_integer(entry.get("itunes_episode")),
         episode_type=episode_type if episode_type in EPISODE_TYPES else "full",
-        show_notes=content[0].get("value", "") if content else entry.get("summary", ""),
+        show_notes=content_value or entry.get("summary", ""),
         image_url=_attribute(entry.get("image"), "href"),
         chapters_url=_attribute(entry.get("podcast_chapters"), "url"),
         transcripts=_transcripts(entry.get("podcast_transcript")),
@@ -131,7 +136,11 @@ def _integer(value: Any) -> int | None:
 
 
 def _attribute(value: Any, key: str) -> str | None:
-    return value.get(key) if isinstance(value, dict) else None
+    return _clean(value.get(key)) if isinstance(value, dict) else None
+
+
+def _clean(value: Any) -> str | None:
+    return (value.strip() or None) if isinstance(value, str) else None
 
 
 def _first_category(channel: Any) -> str:
@@ -143,10 +152,10 @@ def _transcripts(value: Any) -> list[dict[str, str]]:
     candidates = value if isinstance(value, list) else [value] if isinstance(value, dict) else []
     return [
         {
-            "url": candidate["url"],
+            "url": url,
             "type": candidate.get("type", ""),
             "language": candidate.get("language", ""),
         }
         for candidate in candidates
-        if isinstance(candidate, dict) and candidate.get("url")
+        if isinstance(candidate, dict) and (url := _clean(candidate.get("url")))
     ]
