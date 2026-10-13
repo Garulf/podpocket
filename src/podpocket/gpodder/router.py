@@ -12,6 +12,7 @@ from podpocket.gpodder.auth import GpodderRoute, GpodderUser
 from podpocket.gpodder.limits import (
     MAX_ACTIONS,
     MAX_SUBSCRIPTION_CHANGES,
+    MAX_URL_LENGTH,
     StorableText,
     read_json,
 )
@@ -110,11 +111,14 @@ async def upload_subscriptions(
 
 @router.get("/episodes/{username}.json")
 async def get_episode_actions(
-    user: GpodderUser, services: ServicesDep, since: Since = 0
+    user: GpodderUser,
+    services: ServicesDep,
+    since: Since = 0,
+    podcast: Annotated[str | None, Query(max_length=MAX_URL_LENGTH)] = None,
 ) -> dict[str, Any]:
     async with services.sessionmaker() as session:
         cursor = await _cursor(session, user)
-        actions = await episode_actions_since(session, user.uuid, since, cursor)
+        actions = await episode_actions_since(session, user.uuid, since, cursor, podcast)
     return {"actions": actions, "timestamp": cursor}
 
 
