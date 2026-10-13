@@ -3,9 +3,11 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 
 import httpx
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 
 from podpocket import health
+from podpocket.accounts.dependencies import CHALLENGE
 from podpocket.config import USER_AGENT, Settings
 from podpocket.db import create_engine, create_sessionmaker
 from podpocket.feeds.fetch import guarded_transport
@@ -13,6 +15,7 @@ from podpocket.migrate import upgrade_to_head
 from podpocket.pcapi import api, cache, refresh, search, static
 from podpocket.pcapi.wire import MAX_REQUEST_BYTES, BodySizeLimit
 from podpocket.services import build_services
+from podpocket.sync.writer import UserGone
 
 HTTP_TIMEOUT = httpx.Timeout(30.0, connect=10.0)
 
@@ -27,6 +30,10 @@ def build_http_client(settings: Settings) -> httpx.AsyncClient:
     if settings.allow_private_feeds:
         return httpx.AsyncClient(**options)
     return httpx.AsyncClient(transport=guarded_transport(), **options)
+
+
+async def account_gone(request: Request, exc: UserGone) -> JSONResponse:
+    return JSONResponse({"detail": "account no longer exists"}, status_code=401, headers=CHALLENGE)
 
 
 def create_app(settings: Settings) -> FastAPI:
@@ -52,6 +59,7 @@ def create_app(settings: Settings) -> FastAPI:
                 await engine.dispose()
 
     app = FastAPI(title="Pod Pocket", lifespan=lifespan)
+    app.add_exception_handler(UserGone, account_gone)
     app.add_middleware(BodySizeLimit, max_bytes=MAX_REQUEST_BYTES)
     app.include_router(health.router)
     app.include_router(cache.router)

@@ -28,6 +28,10 @@ def wins(new_ms: int, new_value: object, old_ms: int | None, old_value: object) 
     return str(new_value) > str(old_value)
 
 
+class UserGone(LookupError):
+    pass
+
+
 async def lock_user(session: AsyncSession, user_uuid: str) -> User:
     await session.execute(
         update(User)
@@ -37,7 +41,7 @@ async def lock_user(session: AsyncSession, user_uuid: str) -> User:
     )
     user = await session.get(User, user_uuid, populate_existing=True)
     if user is None:
-        raise LookupError(user_uuid)
+        raise UserGone(user_uuid)
     return user
 
 
