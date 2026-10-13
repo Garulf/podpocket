@@ -5,6 +5,7 @@ import httpx
 from fastapi import Request
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from podpocket.accounts.tokens import TokenService
 from podpocket.artwork import ArtworkStore
 from podpocket.config import Settings
 from podpocket.directory.itunes import ITunesDirectory
@@ -22,6 +23,7 @@ class Services:
     directory: ITunesDirectory
     imports: OpmlImports
     artwork: ArtworkStore
+    tokens: TokenService
 
 
 def build_services(
@@ -49,6 +51,11 @@ def build_services(
             FetchPolicy(
                 max_bytes=settings.max_image_bytes, allow_private=settings.allow_private_feeds
             ),
+        ),
+        tokens=TokenService(
+            sessionmaker,
+            settings.secret_key.get_secret_value(),
+            timedelta(minutes=settings.access_token_minutes),
         ),
     )
 
