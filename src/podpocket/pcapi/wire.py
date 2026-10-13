@@ -3,7 +3,7 @@ from typing import Annotated
 from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 from google.protobuf.message import DecodeError, Message
-from pydantic import BaseModel, Field
+from pydantic import AfterValidator, BaseModel, Field
 from starlette.types import ASGIApp, Receive, Scope, Send
 from starlette.types import Message as AsgiMessage
 
@@ -15,6 +15,17 @@ MAX_REQUEST_BYTES = 32 * 1024 * 1024
 TOO_LARGE = "request body too large"
 
 Int64 = Annotated[int, Field(ge=-INT64_MAX - 1, le=INT64_MAX)]
+
+
+def _require_encodable(text: str) -> str:
+    try:
+        text.encode()
+    except UnicodeEncodeError:
+        raise ValueError("text contains an unpaired surrogate") from None
+    return text
+
+
+EncodableText = Annotated[str, AfterValidator(_require_encodable)]
 
 
 def is_protobuf(request: Request) -> bool:

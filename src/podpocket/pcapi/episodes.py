@@ -5,7 +5,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel
 
 from podpocket.accounts.dependencies import CurrentUser
-from podpocket.pcapi.wire import Int64
+from podpocket.pcapi.wire import EncodableText, Int64
 from podpocket.services import Services, get_services
 from podpocket.sync.episodes import EpisodeChange, FieldUpdate, apply_episode_changes
 from podpocket.sync.writer import APP_SOURCE, ChangeWriter
@@ -16,8 +16,8 @@ ServicesDep = Annotated[Services, Depends(get_services)]
 
 
 class EpisodeProgress(BaseModel):
-    uuid: str
-    podcast: str
+    uuid: EncodableText
+    podcast: EncodableText
     position: Int64
     duration: Int64
     status: int

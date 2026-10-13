@@ -192,3 +192,34 @@ async def test_the_app_caps_every_request_body(client):
     )
 
     assert response.status_code == 413
+
+
+LONE_SURROGATE = b"\\ud800"
+JSON_HEADERS = {"Content-Type": "application/json"}
+
+
+@pytest.mark.parametrize(
+    ("path", "body"),
+    [
+        (
+            "/api/history/sync",
+            b'{"changes": [{"action": 1, "modifiedAt": "1", "episode": "e1", "title": "t'
+            + LONE_SURROGATE
+            + b'x"}]}',
+        ),
+        ("/api/user/podcast/episodes", b'{"uuid": "' + LONE_SURROGATE + b'"}'),
+        (
+            "/api/sync/update_episode",
+            b'{"uuid": "'
+            + LONE_SURROGATE
+            + b'", "podcast": "p", "position": 1, "duration": 2, "status": 1}',
+        ),
+    ],
+    ids=["history-sync", "podcast-episodes", "update-episode"],
+)
+async def test_a_lone_surrogate_in_valid_json_is_a_422(client, alice_auth, path, body):
+    response = await client.post(path, content=body, headers={**alice_auth, **JSON_HEADERS})
+
+    assert response.status_code == 422
+    assert "ud800" not in response.text.lower()
+    assert all(set(error) == {"loc", "msg", "type"} for error in response.json()["detail"])

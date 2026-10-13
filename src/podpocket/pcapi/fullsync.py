@@ -19,7 +19,7 @@ from podpocket.models import (
     UserEpisodeState,
 )
 from podpocket.pcapi.records import podcast_list_entry
-from podpocket.pcapi.wire import is_protobuf, protobuf_response, read_message
+from podpocket.pcapi.wire import EncodableText, is_protobuf, protobuf_response, read_message
 from podpocket.protocol import sync_api_pb2 as pb
 from podpocket.protocol import to_timestamp
 from podpocket.services import Services, get_services
@@ -47,7 +47,7 @@ JSON_EPISODE_FIELDS = (
 
 
 class PodcastEpisodesRequest(BaseModel):
-    uuid: str
+    uuid: EncodableText
 
 
 def _known(state: UserEpisodeState | None, field: str, default: Any) -> Any:

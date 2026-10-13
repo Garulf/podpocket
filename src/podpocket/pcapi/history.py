@@ -5,7 +5,7 @@ from pydantic import BaseModel
 
 from podpocket.accounts.dependencies import CurrentUser
 from podpocket.models import HistoryEntry, User
-from podpocket.pcapi.wire import Int64
+from podpocket.pcapi.wire import EncodableText, Int64
 from podpocket.services import Services, get_services
 from podpocket.sync.history import HistoryChange, history_for_year, sync_history
 from podpocket.sync.writer import parse_decimal_ms
@@ -17,12 +17,12 @@ ServicesDep = Annotated[Services, Depends(get_services)]
 
 class HistoryChangeBody(BaseModel):
     action: int
-    modifiedAt: str
-    episode: str | None = None
-    podcast: str | None = None
-    title: str | None = None
-    url: str | None = None
-    published: str | None = None
+    modifiedAt: EncodableText
+    episode: EncodableText | None = None
+    podcast: EncodableText | None = None
+    title: EncodableText | None = None
+    url: EncodableText | None = None
+    published: EncodableText | None = None
 
 
 class HistorySyncBody(BaseModel):
