@@ -3,19 +3,22 @@
 {% block install %}
 ## What it is
 
-Pod Pocket server is the self-hosted backend for the Pod Pocket Android app, a Pocket Casts fork. It ingests podcast feeds and serves the catalogue, search and Discover APIs the app expects. Accounts and sync arrive in a later release.
+Pod Pocket server is the self-hosted backend for the Pod Pocket Android app, a Pocket Casts fork. It ingests podcast feeds and serves the catalogue, search and Discover APIs the app expects. It also keeps each user's account and synced state: sign-in, subscriptions, playback progress, Up Next, folders, playlists, bookmarks and listening history.
 
 ## Running it
 
 ```sh
 docker run -p 8000:8000 \
   -e PODPOCKET_PUBLIC_URL=https://pod.example.com \
+  -e PODPOCKET_SECRET_KEY=replace-with-your-own-key \
   -v podpocket-data:/data \
   -v podpocket-cache:/cache \
   ghcr.io/garulf/podpocket:latest
 ```
 
 The container runs as uid 1000. Named volumes work as is, but a bind-mounted `/data` or `/cache` must be writable by that uid.
+
+Generate the secret key once and keep it. It signs the access tokens, so changing it signs every device out. Any 32 or more random characters work, for example the output of `python3 -c 'import secrets; print(secrets.token_urlsafe(48))'`.
 
 Put it behind a reverse proxy that terminates TLS. The server trusts the forwarded headers it receives, so do not expose port 8000 directly to the internet.
 {% endblock %}
@@ -28,6 +31,8 @@ All settings are environment variables with the `PODPOCKET_` prefix.
 | Variable | Default | Description |
 | --- | --- | --- |
 | `PODPOCKET_PUBLIC_URL` | required | Externally reachable base URL. Absolute links in API responses are built from it. |
+| `PODPOCKET_SECRET_KEY` | required | Signs access tokens. At least 32 characters. |
+| `PODPOCKET_ACCESS_TOKEN_MINUTES` | `60` | How long an access token is valid. The app renews it on its own. |
 | `PODPOCKET_DATABASE_URL` | `sqlite+aiosqlite:////data/podpocket.db` | SQLAlchemy database URL. Migrations run on startup. |
 | `PODPOCKET_CACHE_DIR` | `/cache` | Where cached artwork is stored. |
 | `PODPOCKET_REGION` | `us` | Region used for Discover content. |
@@ -47,6 +52,20 @@ Each prefix replaces one Pocket Casts host, so the app only needs to be pointed 
 | `/refresh` | `refresh.pocketcasts.com` |
 | `/search` | `search.pocketcasts.com` |
 | `/static` | `static.pocketcasts.com` |
+| `/api` | `api.pocketcasts.com` |
+
+## Accounts
+
+There is no sign-up in the app. The administrator manages accounts with the `podpocket user` command inside the container:
+
+| Command | What it does |
+| --- | --- |
+| `docker exec -it <container> podpocket user add NAME --email EMAIL` | Creates an account. Add `--admin` to mark it as an administrator. |
+| `docker exec -it <container> podpocket user passwd NAME` | Sets a new password and signs every device of that user out. |
+| `docker exec -it <container> podpocket user remove NAME` | Deletes the account and all of its synced data. Asks first unless you pass `--yes`. |
+| `docker exec -it <container> podpocket user list` | Lists accounts. |
+
+`user add` and `user passwd` ask for the password twice; with `--password-stdin` they read one line from standard input instead. In the app, the email field accepts either the username or the email.
 {% endblock %}
 
 {% block extra %}
@@ -64,6 +83,7 @@ To run the server locally, keep its database and cache in the working directory:
 PODPOCKET_PUBLIC_URL=http://localhost:8000 \
 PODPOCKET_DATABASE_URL=sqlite+aiosqlite:///./dev.db \
 PODPOCKET_CACHE_DIR=./cache \
+PODPOCKET_SECRET_KEY=dev-only-dev-only-dev-only-dev-only \
 uv run podpocket serve
 ```
 
