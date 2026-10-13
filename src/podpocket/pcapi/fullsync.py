@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from podpocket.accounts.dependencies import CurrentUser
+from podpocket.accounts.dependencies import AuthenticatedRoute, CurrentUser
 from podpocket.models import (
     Bookmark,
     Episode,
@@ -29,7 +29,7 @@ from podpocket.sync.playlists import playlist_list_entry
 from podpocket.sync.podcasts import DEFAULT_EPISODES_SORT_ORDER
 from podpocket.sync.writer import KEY_CHUNK, load_by_keys
 
-router = APIRouter(prefix="/api")
+router = APIRouter(prefix="/api", route_class=AuthenticatedRoute)
 ServicesDep = Annotated[Services, Depends(get_services)]
 NOT_PLAYED = 1
 MAX_EPISODE_PAIRS = 10_000

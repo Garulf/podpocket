@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 
-from podpocket.accounts.dependencies import CurrentUser
+from podpocket.accounts.dependencies import AuthenticatedRoute, CurrentUser
 from podpocket.pcapi.wire import Int64, is_protobuf, protobuf_response, read_json, read_message
 from podpocket.protocol import from_timestamp, to_timestamp
 from podpocket.protocol import sync_api_pb2 as pb
@@ -19,7 +19,7 @@ from podpocket.sync.upnext import (
 )
 from podpocket.timefmt import iso_z, now_ms, parse_iso
 
-router = APIRouter(prefix="/api")
+router = APIRouter(prefix="/api", route_class=AuthenticatedRoute)
 ServicesDep = Annotated[Services, Depends(get_services)]
 
 

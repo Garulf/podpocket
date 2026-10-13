@@ -3,7 +3,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
-from podpocket.accounts.dependencies import CurrentUser
+from podpocket.accounts.dependencies import AuthenticatedRoute, CurrentUser
 from podpocket.models import HistoryEntry, User
 from podpocket.pcapi.wire import EncodableText, Int64
 from podpocket.services import Services, get_services
@@ -11,7 +11,7 @@ from podpocket.sync.history import HistoryChange, history_for_year, sync_history
 from podpocket.sync.writer import parse_decimal_ms
 from podpocket.timefmt import iso_z, now_ms, parse_iso
 
-router = APIRouter(prefix="/api")
+router = APIRouter(prefix="/api", route_class=AuthenticatedRoute)
 ServicesDep = Annotated[Services, Depends(get_services)]
 
 

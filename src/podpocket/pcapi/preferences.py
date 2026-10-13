@@ -3,14 +3,14 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends
 from pydantic import AfterValidator, BaseModel
 
-from podpocket.accounts.dependencies import CurrentUser
+from podpocket.accounts.dependencies import AuthenticatedRoute, CurrentUser
 from podpocket.services import Services, get_services
 from podpocket.sync.devices import stats_summary
 from podpocket.sync.named_settings import update_named_settings
 from podpocket.sync.writer import is_clean_text
 from podpocket.timefmt import now_ms
 
-router = APIRouter(prefix="/api")
+router = APIRouter(prefix="/api", route_class=AuthenticatedRoute)
 ServicesDep = Annotated[Services, Depends(get_services)]
 
 

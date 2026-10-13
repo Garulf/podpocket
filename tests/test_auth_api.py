@@ -149,3 +149,30 @@ async def test_signup_and_google_are_refused_with_a_readable_message(client, pat
 
     assert response.status_code == 400
     assert set(response.json()) == {"errorMessage", "errorMessageId"}
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/api/history/sync",
+        "/api/user/podcast/episodes",
+        "/api/sync/update_episode",
+        "/api/user/named_settings/update",
+    ],
+)
+async def test_the_body_is_not_parsed_before_the_caller_is_known(client, path):
+    response = await client.post(
+        path, content=b"{ not json", headers={"Content-Type": "application/json"}
+    )
+
+    assert response.status_code == 401
+
+
+async def test_a_signed_in_caller_still_gets_body_errors(client, alice_auth):
+    response = await client.post(
+        "/api/history/sync",
+        content=b"{ not json",
+        headers={**alice_auth, "Content-Type": "application/json"},
+    )
+
+    assert response.status_code == 422

@@ -3,9 +3,11 @@ from typing import Any
 from fastapi import APIRouter, Depends
 from fastapi.responses import Response
 
-from podpocket.accounts.dependencies import current_user
+from podpocket.accounts.dependencies import AuthenticatedRoute, current_user
 
-router = APIRouter(prefix="/api", dependencies=[Depends(current_user)])
+router = APIRouter(
+    prefix="/api", route_class=AuthenticatedRoute, dependencies=[Depends(current_user)]
+)
 
 
 def no_files() -> dict[str, int]:

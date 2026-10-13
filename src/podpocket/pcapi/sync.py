@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from podpocket.accounts.dependencies import CurrentUser
+from podpocket.accounts.dependencies import AuthenticatedRoute, CurrentUser
 from podpocket.models import Bookmark, Folder, Playlist, Subscription, UserEpisodeState
 from podpocket.pcapi.records import episode_change, episode_record, podcast_change, podcast_record
 from podpocket.pcapi.wire import protobuf_response, read_message
@@ -31,7 +31,7 @@ from podpocket.sync.writer import (
 )
 from podpocket.timefmt import from_epoch_ms, iso_ms, now_ms
 
-router = APIRouter(prefix="/api")
+router = APIRouter(prefix="/api", route_class=AuthenticatedRoute)
 ServicesDep = Annotated[Services, Depends(get_services)]
 DEVICE = "device"
 RECORD_SOURCES = (
