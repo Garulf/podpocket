@@ -17,6 +17,7 @@ class Settings(DatabaseSettings):
     public_url: str
     secret_key: SecretStr = Field(min_length=32)
     access_token_minutes: int = Field(default=60, ge=1, le=1440)
+    max_concurrent_logins: int = Field(default=4, ge=1, le=64)
     cache_dir: Path = Path("/cache")
     region: str = "us"
     refresh_interval_minutes: int = 30

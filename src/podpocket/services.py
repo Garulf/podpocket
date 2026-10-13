@@ -5,6 +5,8 @@ import httpx
 from fastapi import Request
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from podpocket.accounts import passwords
+from podpocket.accounts.throttle import LoginGate
 from podpocket.accounts.tokens import TokenService
 from podpocket.artwork import ArtworkStore
 from podpocket.config import Settings
@@ -24,6 +26,7 @@ class Services:
     imports: OpmlImports
     artwork: ArtworkStore
     tokens: TokenService
+    login_gate: LoginGate
 
 
 def build_services(
@@ -31,6 +34,7 @@ def build_services(
     sessionmaker: async_sessionmaker[AsyncSession],
     http: httpx.AsyncClient,
 ) -> Services:
+    passwords.configure(settings.max_concurrent_logins)
     feed_policy = FetchPolicy(
         max_bytes=settings.max_feed_bytes, allow_private=settings.allow_private_feeds
     )
@@ -57,6 +61,7 @@ def build_services(
             settings.secret_key.get_secret_value(),
             timedelta(minutes=settings.access_token_minutes),
         ),
+        login_gate=LoginGate(),
     )
 
 

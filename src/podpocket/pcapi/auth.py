@@ -5,8 +5,8 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from podpocket.accounts.dependencies import CurrentUser
+from podpocket.accounts.throttle import LoginBusy, LoginLocked
 from podpocket.accounts.tokens import InvalidToken, IssuedTokens
-from podpocket.accounts.users import authenticate
 from podpocket.models import User
 from podpocket.services import Services, get_services
 from podpocket.timefmt import iso_z
@@ -51,7 +51,16 @@ async def login(body: LoginRequest, services: ServicesDep) -> JSONResponse:
         return login_error(400, "Enter your username or email.", "login_email_blank")
     if not body.password:
         return login_error(400, "Enter your password.", "login_password_blank")
-    user = await authenticate(services.sessionmaker, body.email, body.password)
+    try:
+        user = await services.login_gate.authenticate(
+            services.sessionmaker, body.email, body.password
+        )
+    except LoginBusy:
+        return login_error(429, "The server is busy. Try again in a moment.", "login_server_busy")
+    except LoginLocked:
+        return login_error(
+            429, "Too many failed attempts. Try again shortly.", "login_account_locked"
+        )
     if user is None:
         return login_error(401, "Incorrect username or password.", "login_password_incorrect")
     issued = await services.tokens.issue(user, body.scope)

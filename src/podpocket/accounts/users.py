@@ -1,7 +1,7 @@
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -76,15 +76,25 @@ async def authenticate(sessionmaker: Sessionmaker, login: str, password: str) ->
         return None
     async with sessionmaker() as session:
         user = await find_user(session, login)
-        if user is None:
-            await spend_verification_time(password)
-            return None
-        if not await verify_password(user.password_hash, password):
-            return None
-        if needs_rehash(user.password_hash):
-            user.password_hash = await hash_password(password)
-            await session.commit()
+    if user is None:
+        await spend_verification_time(password)
+        return None
+    if not await verify_password(user.password_hash, password):
+        return None
+    if needs_rehash(user.password_hash):
+        await _upgrade_hash(sessionmaker, user, password)
     return user
+
+
+async def _upgrade_hash(sessionmaker: Sessionmaker, user: User, password: str) -> None:
+    upgraded = await hash_password(password)
+    async with sessionmaker() as session:
+        await session.execute(
+            update(User)
+            .where(User.uuid == user.uuid, User.password_hash == user.password_hash)
+            .values(password_hash=upgraded)
+        )
+        await session.commit()
 
 
 def _is_utf8_encodable(value: str) -> bool:

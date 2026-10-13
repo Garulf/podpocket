@@ -47,3 +47,15 @@ def test_access_token_lifetime_accepts_its_bounds(minutes):
     )
 
     assert settings.access_token_minutes == minutes
+
+
+def test_concurrent_logins_default_to_four():
+    settings = Settings(public_url="http://pod.test", secret_key=SECRET)
+
+    assert settings.max_concurrent_logins == 4
+
+
+@pytest.mark.parametrize("limit", [0, -1, 65])
+def test_concurrent_logins_are_bounded(limit):
+    with pytest.raises(ValidationError, match="max_concurrent_logins"):
+        Settings(public_url="http://pod.test", secret_key=SECRET, max_concurrent_logins=limit)
