@@ -1,5 +1,7 @@
 import asyncio
+from types import SimpleNamespace
 
+import pytest
 from alembic.autogenerate import compare_metadata
 from alembic.migration import MigrationContext
 from asgi_lifespan import LifespanManager
@@ -7,6 +9,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 
 from podpocket.app import build_http_client, create_app
 from podpocket.feeds.fetch import GuardedNetworkBackend
+from podpocket.feeds.refresher import FeedRefresher
 from podpocket.migrate import upgrade_to_head
 from podpocket.models import Base
 
@@ -44,6 +47,7 @@ async def test_client_blocks_private_networks_by_default(settings):
     ) as http:
         assert isinstance(pool_backend(http), GuardedNetworkBackend)
         assert http.follow_redirects is False
+        assert http._trust_env is False
         assert "PodPocket" in http.headers["User-Agent"]
 
 
@@ -51,15 +55,41 @@ async def test_client_allows_private_networks_when_configured(settings):
     async with build_http_client(settings.model_copy(update={"allow_private_feeds": True})) as http:
         assert not isinstance(pool_backend(http), GuardedNetworkBackend)
         assert http.follow_redirects is False
+        assert http._trust_env is False
         assert "PodPocket" in http.headers["User-Agent"]
 
 
-async def test_lifespan_exposes_refresher(services):
-    assert services.refresher is not None
+@pytest.fixture
+def scheduler_probe(monkeypatch):
+    probe = SimpleNamespace(started=asyncio.Event(), cancelled=False, calls=0)
+
+    async def run_forever(self):
+        probe.calls += 1
+        probe.started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            probe.cancelled = True
+            raise
+
+    monkeypatch.setattr(FeedRefresher, "run_forever", run_forever)
+    return probe
 
 
-async def test_scheduler_starts_and_stops_with_the_app(settings):
+async def test_scheduler_runs_during_lifespan_and_is_cancelled_on_exit(settings, scheduler_probe):
     application = create_app(settings.model_copy(update={"run_scheduler": True}))
 
     async with LifespanManager(application):
-        assert application.state.services.refresher is not None
+        await asyncio.wait_for(scheduler_probe.started.wait(), timeout=5)
+        assert scheduler_probe.cancelled is False
+
+    assert scheduler_probe.cancelled is True
+
+
+async def test_scheduler_does_not_run_when_disabled(settings, scheduler_probe):
+    application = create_app(settings.model_copy(update={"run_scheduler": False}))
+
+    async with LifespanManager(application):
+        await asyncio.sleep(0)
+
+    assert scheduler_probe.calls == 0

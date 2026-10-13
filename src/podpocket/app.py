@@ -14,10 +14,10 @@ from podpocket.services import build_services
 
 
 def build_http_client(settings: Settings) -> httpx.AsyncClient:
-    headers = {"User-Agent": USER_AGENT}
+    options = {"headers": {"User-Agent": USER_AGENT}, "follow_redirects": False, "trust_env": False}
     if settings.allow_private_feeds:
-        return httpx.AsyncClient(headers=headers, follow_redirects=False)
-    return httpx.AsyncClient(headers=headers, transport=guarded_transport(), follow_redirects=False)
+        return httpx.AsyncClient(**options)
+    return httpx.AsyncClient(transport=guarded_transport(), **options)
 
 
 def create_app(settings: Settings) -> FastAPI:

@@ -234,6 +234,36 @@ async def test_refresh_due_only_touches_active_due_podcasts(respx_mock, refreshe
     assert active.call_count == 1
 
 
+async def test_refresh_due_survives_an_unexpected_error_for_one_podcast(
+    respx_mock, refresher, services, monkeypatch
+):
+    broken_url = "https://feeds.test/broken"
+    healthy_url = "https://feeds.test/healthy"
+    broken_uuid, healthy_uuid = podcast_uuid(broken_url), podcast_uuid(healthy_url)
+    async with services.sessionmaker() as session:
+        session.add_all(
+            [
+                Podcast(uuid=broken_uuid, feed_url=broken_url),
+                Podcast(uuid=healthy_uuid, feed_url=healthy_url),
+            ]
+        )
+        await session.commit()
+    await refresher.touch([broken_uuid, healthy_uuid])
+    healthy = respx_mock.get(healthy_url).respond(200, content=rss(item()))
+    original_refresh = refresher.refresh
+
+    async def refresh(uuid):
+        if uuid == broken_uuid:
+            raise LookupError(uuid)
+        return await original_refresh(uuid)
+
+    monkeypatch.setattr(refresher, "refresh", refresh)
+
+    assert await refresher.refresh_due() == 2
+
+    assert healthy.call_count == 1
+
+
 async def test_ensure_fetched_fetches_stubs(respx_mock, refresher, services):
     async with services.sessionmaker() as session:
         session.add(Podcast(uuid=podcast_uuid(FEED), feed_url=FEED, title="From directory"))

@@ -130,6 +130,8 @@ class FeedRefresher:
                     await self.refresh(uuid)
                 except FeedError as exc:
                     logger.warning("refresh of %s failed: %s", uuid, exc)
+                except Exception:
+                    logger.exception("refresh of %s failed unexpectedly", uuid)
 
         await asyncio.gather(*(refresh_one(uuid) for uuid in due))
         return len(due)
