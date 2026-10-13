@@ -3,6 +3,7 @@ from fastapi import APIRouter
 from podpocket.pcapi import (
     auth,
     compat,
+    episode_sources,
     episodes,
     fullsync,
     history,
@@ -12,5 +13,15 @@ from podpocket.pcapi import (
 )
 
 router = APIRouter()
-for module in (auth, compat, episodes, sync, fullsync, upnext, history, preferences):
+for module in (
+    auth,
+    compat,
+    episodes,
+    episode_sources,
+    sync,
+    fullsync,
+    upnext,
+    history,
+    preferences,
+):
     router.include_router(module.router)
