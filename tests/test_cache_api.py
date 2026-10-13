@@ -214,3 +214,20 @@ async def test_global_episode_search(client, show):
             }
         ]
     }
+
+
+@pytest.mark.parametrize(
+    ("path", "body"),
+    [
+        ("/cache/mobile/podcast/episode/search", '{"podcastuuid": "x", "searchterm": "\\ud800"}'),
+        ("/cache/mobile/podcast/episode/search", '{"podcastuuid": "\\ud800", "searchterm": "a"}'),
+        ("/cache/episode/search", '{"term": "\\ud800"}'),
+        ("/cache/v2/search/combined", '{"term": "\\ud800"}'),
+    ],
+)
+async def test_search_bodies_with_lone_surrogates_are_rejected(client, path, body):
+    response = await client.post(
+        path, content=body.encode(), headers={"Content-Type": "application/json"}
+    )
+
+    assert response.status_code == 422
