@@ -1,3 +1,4 @@
+import logging
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
@@ -7,7 +8,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from podpocket.gpodder.auth import GpodderRoute, GpodderUser
-from podpocket.gpodder.limits import MAX_SUBSCRIPTION_CHANGES, StorableText, read_json
+from podpocket.gpodder.limits import (
+    MAX_ACTIONS,
+    MAX_SUBSCRIPTION_CHANGES,
+    StorableText,
+    read_json,
+)
 from podpocket.gpodder.subscriptions import (
     AddedAndRemoved,
     apply_subscription_upload,
@@ -15,11 +21,14 @@ from podpocket.gpodder.subscriptions import (
     ensure_podcasts,
     subscription_delta,
 )
+from podpocket.gpodder.uploads import match_actions, parse_actions, plan_changes
 from podpocket.models import User
 from podpocket.services import Services, get_services
+from podpocket.sync.episodes import apply_episode_changes
 from podpocket.sync.writer import GPODDER_SOURCE, INT64_MAX, ChangeWriter, UserGone
 from podpocket.timefmt import now_ms
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/2", route_class=GpodderRoute)
 ServicesDep = Annotated[Services, Depends(get_services)]
 Since = Annotated[int, Query(ge=0, le=INT64_MAX)]
@@ -96,3 +105,29 @@ async def upload_subscriptions(
         cursor = writer.cursor
         await session.commit()
     return {"timestamp": cursor, "update_urls": upload.update_urls}
+
+
+@router.post("/episodes/{username}.json")
+async def upload_episode_actions(
+    request: Request, user: GpodderUser, services: ServicesDep
+) -> dict[str, Any]:
+    body = await read_json(request)
+    if not isinstance(body, list):
+        raise HTTPException(status_code=400, detail="expected a list of episode actions")
+    if len(body) > MAX_ACTIONS:
+        raise HTTPException(status_code=413, detail="too many episode actions")
+    actions, ignored = parse_actions(body)
+    now = now_ms()
+    async with services.sessionmaker() as session:
+        writer = await ChangeWriter.begin(session, user.uuid, source=GPODDER_SOURCE, now_ms=now)
+        changes, report = plan_changes(await match_actions(session, actions), now, ignored)
+        await apply_episode_changes(writer, changes)
+        cursor = writer.cursor
+        await session.commit()
+    logger.info(
+        "gpodder episode actions: %d applied, %d unmatched, %d ignored",
+        report.applied,
+        report.unmatched,
+        report.ignored,
+    )
+    return {"timestamp": cursor, "update_urls": []}

@@ -19,8 +19,12 @@ ROUTES = [
     ("POST", "/api/2/auth/{user}/logout.json"),
     ("GET", "/api/2/subscriptions/{user}/phone.json"),
     ("POST", "/api/2/subscriptions/{user}/phone.json"),
+    ("POST", "/api/2/episodes/{user}.json"),
 ]
-BODIES: dict[str, object] = {"/api/2/subscriptions/{user}/phone.json": {}}
+BODIES: dict[str, object] = {
+    "/api/2/subscriptions/{user}/phone.json": {},
+    "/api/2/episodes/{user}.json": [],
+}
 
 
 async def call(client, method, path, user, headers):
