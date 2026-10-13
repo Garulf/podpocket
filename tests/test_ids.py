@@ -17,6 +17,10 @@ from podpocket.ids import episode_uuid, normalize_feed_url, podcast_uuid
         ("pcast://example.com/rss", "http://example.com/rss"),
         ("itpc://example.com/rss", "http://example.com/rss"),
         ("rss://example.com/rss", "http://example.com/rss"),
+        ("https://User:PaSs@Example.COM:443/feed", "https://User:PaSs@example.com/feed"),
+        ("http://example.com:80/rss", "http://example.com/rss"),
+        ("http://example.com:8080/rss", "http://example.com:8080/rss"),
+        ("http://[::1]:8080/x", "http://[::1]:8080/x"),
     ],
 )
 def test_normalize_feed_url(raw, expected):
@@ -24,7 +28,16 @@ def test_normalize_feed_url(raw, expected):
 
 
 @pytest.mark.parametrize(
-    "raw", ["", "example.com/rss", "ftp://example.com/rss", "javascript:alert(1)", "https://"]
+    "raw",
+    [
+        "",
+        "example.com/rss",
+        "ftp://example.com/rss",
+        "javascript:alert(1)",
+        "https://",
+        "http://:80/",
+        "http://user@/x",
+    ],
 )
 def test_normalize_feed_url_rejects_non_http(raw):
     with pytest.raises(ValueError):

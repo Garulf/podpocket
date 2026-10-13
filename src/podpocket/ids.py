@@ -1,7 +1,8 @@
 import uuid
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import SplitResult, urlsplit, urlunsplit
 
 NAMESPACE = uuid.UUID("6b1f3c1e-5d0a-4c7e-9a0e-2f6d8c4b7a10")
+DEFAULT_PORTS = {"http": 80, "https": 443}
 PSEUDO_SCHEMES = frozenset({"feed", "pcast", "itpc", "rss"})
 
 
@@ -12,11 +13,20 @@ def normalize_feed_url(raw: str) -> str:
         rest = rest.removeprefix("//")
         url = rest if rest.lower().startswith(("http://", "https://")) else f"http://{rest}"
     parts = urlsplit(url)
-    if parts.scheme.lower() not in ("http", "https") or not parts.netloc:
+    scheme = parts.scheme.lower()
+    if scheme not in DEFAULT_PORTS or not parts.hostname:
         raise ValueError(f"not an http(s) URL: {raw!r}")
     return urlunsplit(
-        (parts.scheme.lower(), parts.netloc.lower(), parts.path or "/", parts.query, "")
+        (scheme, _normalized_netloc(parts, scheme), parts.path or "/", parts.query, "")
     )
+
+
+def _normalized_netloc(parts: SplitResult, scheme: str) -> str:
+    userinfo, has_userinfo, _ = parts.netloc.rpartition("@")
+    host = f"[{parts.hostname}]" if ":" in parts.hostname else parts.hostname
+    port = parts.port
+    suffix = f":{port}" if port is not None and port != DEFAULT_PORTS[scheme] else ""
+    return f"{userinfo}{has_userinfo}{host}{suffix}"
 
 
 def podcast_uuid(feed_url: str) -> str:
