@@ -8,6 +8,7 @@ from asgi_lifespan import LifespanManager
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from podpocket.app import build_http_client, create_app
+from podpocket.db import create_engine
 from podpocket.feeds.fetch import GuardedNetworkBackend
 from podpocket.feeds.refresher import FeedRefresher
 from podpocket.migrate import upgrade_to_head
@@ -35,6 +36,22 @@ def test_migrations_match_models(tmp_path):
         return drift
 
     assert asyncio.run(schema_drift()) == []
+
+
+async def test_file_databases_get_a_pool_sized_for_concurrent_refreshes(tmp_path):
+    engine = create_engine(f"sqlite+aiosqlite:///{tmp_path / 'pool.db'}")
+
+    assert (engine.pool.size(), engine.pool._max_overflow) == (20, 20)
+    await engine.dispose()
+
+
+@pytest.mark.parametrize("url", ["sqlite+aiosqlite://", "sqlite+aiosqlite:///:memory:"])
+async def test_memory_databases_keep_their_default_pool(url):
+    engine = create_engine(url)
+
+    async with engine.connect() as connection:
+        assert (await connection.exec_driver_sql("SELECT 1")).scalar() == 1
+    await engine.dispose()
 
 
 def pool_backend(client):

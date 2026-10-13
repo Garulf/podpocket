@@ -1,6 +1,6 @@
 from datetime import UTC, datetime
 
-from sqlalchemy import DateTime, event
+from sqlalchemy import DateTime, event, make_url
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -30,11 +30,25 @@ class UTCDateTime(TypeDecorator[datetime]):
         return None if value is None else value.replace(tzinfo=UTC)
 
 
+POOL_SIZE = 20
+MAX_OVERFLOW = 20
+
+
 def create_engine(database_url: str) -> AsyncEngine:
-    engine = create_async_engine(database_url)
+    pool_options = (
+        {}
+        if _is_sqlite_memory(database_url)
+        else {"pool_size": POOL_SIZE, "max_overflow": MAX_OVERFLOW}
+    )
+    engine = create_async_engine(database_url, **pool_options)
     if engine.dialect.name == "sqlite":
         event.listen(engine.sync_engine, "connect", _sqlite_pragmas)
     return engine
+
+
+def _is_sqlite_memory(database_url: str) -> bool:
+    url = make_url(database_url)
+    return url.get_backend_name() == "sqlite" and url.database in (None, "", ":memory:")
 
 
 def _sqlite_pragmas(dbapi_connection, _connection_record) -> None:
