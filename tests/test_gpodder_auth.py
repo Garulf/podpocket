@@ -20,6 +20,7 @@ ROUTES = [
     ("GET", "/api/2/subscriptions/{user}/phone.json"),
     ("POST", "/api/2/subscriptions/{user}/phone.json"),
     ("POST", "/api/2/episodes/{user}.json"),
+    ("GET", "/api/2/episodes/{user}.json"),
 ]
 BODIES: dict[str, object] = {
     "/api/2/subscriptions/{user}/phone.json": {},

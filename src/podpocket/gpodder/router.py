@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from podpocket.gpodder.actions import episode_actions_since
 from podpocket.gpodder.auth import GpodderRoute, GpodderUser
 from podpocket.gpodder.limits import (
     MAX_ACTIONS,
@@ -105,6 +106,16 @@ async def upload_subscriptions(
         cursor = writer.cursor
         await session.commit()
     return {"timestamp": cursor, "update_urls": upload.update_urls}
+
+
+@router.get("/episodes/{username}.json")
+async def get_episode_actions(
+    user: GpodderUser, services: ServicesDep, since: Since = 0
+) -> dict[str, Any]:
+    async with services.sessionmaker() as session:
+        cursor = await _cursor(session, user)
+        actions = await episode_actions_since(session, user.uuid, since, cursor)
+    return {"actions": actions, "timestamp": cursor}
 
 
 @router.post("/episodes/{username}.json")
