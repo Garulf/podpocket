@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.3.0](https://github.com/Garulf/podpocket/compare/v0.2.0...v0.3.0) (2026-10-13)
+
+
+### Features
+
+* authenticate gpodder clients with the account password ([a6a7e58](https://github.com/Garulf/podpocket/commit/a6a7e58f4cb29066c5ea1341c189981618bc0cf3))
+* merge gpodder episode actions into episode state ([06aa4c3](https://github.com/Garulf/podpocket/commit/06aa4c38b05693ac5a8accd5653aa0bc06e42063))
+* serve and accept gpodder subscription changes ([1babe75](https://github.com/Garulf/podpocket/commit/1babe75928139580eadd99c2035b58c8f27621bc))
+* serve episode progress as gpodder episode actions ([3cc3c9f](https://github.com/Garulf/podpocket/commit/3cc3c9fc489f3f88961a258342e05601a76b3567))
+
+
+### Bug Fixes
+
+* answer 422 for lone surrogates in cache search bodies ([2085236](https://github.com/Garulf/podpocket/commit/20852361f2e99c956de497b6606e97a9132f8e7b))
+* bound and narrow gpodder episode actions ([e13fe9b](https://github.com/Garulf/podpocket/commit/e13fe9b119111afa5f0f7dcc17bb44b4b76cea8c))
+* cache verified gpodder credentials ([3594e00](https://github.com/Garulf/podpocket/commit/3594e002a20fd5f9476c21ce047444d111dc752d))
+* harden gpodder credential cache and subscription conflicts ([1587eab](https://github.com/Garulf/podpocket/commit/1587eab31433b82afd289e5064f8900682aa6a39))
+* keep music assistant signed in between its syncs ([48c1fdb](https://github.com/Garulf/podpocket/commit/48c1fdbb1e265ba4fa2d6161dc032c8f19022a66))
+* mark finished episodes played and keep lookups out of the write lock ([d0bbcbf](https://github.com/Garulf/podpocket/commit/d0bbcbf1cee16107e3bae7dd563e47eac1b772fe))
+* reject invalid gpodder action timestamps and collapse duplicate actions ([a8c454e](https://github.com/Garulf/podpocket/commit/a8c454eaf102ade11c94eb187dd336db90b7f4f7))
+* write the change log in one statement per request ([eda5eff](https://github.com/Garulf/podpocket/commit/eda5efff25c96323d09592aded0b922f6611cca1))
+
+
+### Documentation
+
+* describe manual sync and the remembered sign-in ([d16a608](https://github.com/Garulf/podpocket/commit/d16a608a0068eed801711aa44872590ff6b0b6d5))
+* describe the music assistant setup ([f2bb173](https://github.com/Garulf/podpocket/commit/f2bb173c9720454dd4451f992d4166d74a38c2f9))
+* explain music assistant sync timing and credential limits ([a480a91](https://github.com/Garulf/podpocket/commit/a480a9126f3ad540f6c144ff0b8917e64f44b88d))
+
 ## [0.2.0](https://github.com/Garulf/podpocket/compare/v0.1.0...v0.2.0) (2026-10-13)
 
 
