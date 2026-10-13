@@ -11,6 +11,7 @@ from podpocket.db import create_engine, create_sessionmaker
 from podpocket.feeds.fetch import guarded_transport
 from podpocket.migrate import upgrade_to_head
 from podpocket.pcapi import api, cache, refresh, search, static
+from podpocket.pcapi.wire import MAX_REQUEST_BYTES, BodySizeLimit
 from podpocket.services import build_services
 
 HTTP_TIMEOUT = httpx.Timeout(30.0, connect=10.0)
@@ -51,6 +52,7 @@ def create_app(settings: Settings) -> FastAPI:
                 await engine.dispose()
 
     app = FastAPI(title="Pod Pocket", lifespan=lifespan)
+    app.add_middleware(BodySizeLimit, max_bytes=MAX_REQUEST_BYTES)
     app.include_router(health.router)
     app.include_router(cache.router)
     app.include_router(search.router)
