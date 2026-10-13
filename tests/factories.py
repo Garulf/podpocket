@@ -1,4 +1,7 @@
+import io
 from datetime import datetime, timedelta
+
+from PIL import Image
 
 NAMESPACES = (
     'xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd" '
@@ -43,3 +46,9 @@ class FakeClock:
 
     def advance(self, delta: timedelta) -> None:
         self.now += delta
+
+
+def png(width: int = 1200, height: int = 800, color: tuple[int, int, int] = (200, 40, 40)) -> bytes:
+    buffer = io.BytesIO()
+    Image.new("RGB", (width, height), color).save(buffer, "PNG")
+    return buffer.getvalue()

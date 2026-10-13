@@ -5,6 +5,7 @@ import httpx
 from fastapi import Request
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from podpocket.artwork import ArtworkStore
 from podpocket.config import Settings
 from podpocket.directory.itunes import ITunesDirectory
 from podpocket.feeds.fetch import FetchPolicy
@@ -20,6 +21,7 @@ class Services:
     refresher: FeedRefresher
     directory: ITunesDirectory
     imports: OpmlImports
+    artwork: ArtworkStore
 
 
 def build_services(
@@ -40,6 +42,14 @@ def build_services(
         refresher=refresher,
         directory=ITunesDirectory(http, settings.region),
         imports=OpmlImports(refresher.resolve),
+        artwork=ArtworkStore(
+            settings.cache_dir / "artwork",
+            sessionmaker,
+            http,
+            FetchPolicy(
+                max_bytes=settings.max_image_bytes, allow_private=settings.allow_private_feeds
+            ),
+        ),
     )
 
 
