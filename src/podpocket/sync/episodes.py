@@ -2,7 +2,13 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 
 from podpocket.models import UserEpisodeState
-from podpocket.sync.writer import EPISODE, ChangeWriter, wins
+from podpocket.sync.writer import (
+    EPISODE,
+    INT64_MAX,
+    ChangeWriter,
+    load_by_keys,
+    wins,
+)
 
 FIELDS = (
     "playing_status",
@@ -13,6 +19,8 @@ FIELDS = (
     "deselected_chapters",
 )
 PLAYING_STATUSES = frozenset({1, 2, 3})
+INT64_MIN = -(2**63)
+MAX_CLOCK_SKEW_MS = 3_600_000
 
 
 @dataclass(frozen=True)
@@ -33,44 +41,66 @@ class EpisodeChange:
     deselected_chapters: FieldUpdate[str] | None = None
 
 
+def _is_int64(value: object) -> bool:
+    return (
+        isinstance(value, int) and not isinstance(value, bool) and INT64_MIN <= value <= INT64_MAX
+    )
+
+
 def _acceptable(field: str, value: object) -> bool:
     match field:
         case "playing_status":
-            return value in PLAYING_STATUSES
+            return _is_int64(value) and value in PLAYING_STATUSES
         case "duration":
-            return isinstance(value, int) and value > 0
+            return _is_int64(value) and value > 0
         case "played_up_to":
-            return isinstance(value, int) and value >= 0
-    return True
+            return _is_int64(value) and value >= 0
+        case "archived" | "starred":
+            return isinstance(value, bool)
+        case "deselected_chapters":
+            return isinstance(value, str)
+    return False
 
 
 async def apply_episode_changes(writer: ChangeWriter, changes: Iterable[EpisodeChange]) -> set[str]:
-    states: dict[str, UserEpisodeState] = {}
-    changed: set[str] = set()
-    for change in changes:
-        uuid = change.episode_uuid
-        if not uuid:
-            continue
-        state = states.get(uuid) or await writer.session.get(
-            UserEpisodeState, (writer.user_uuid, uuid)
+    batch = [change for change in changes if change.episode_uuid]
+    states: dict[str, UserEpisodeState] = {
+        state.episode_uuid: state
+        for state in await load_by_keys(
+            writer.session,
+            UserEpisodeState,
+            UserEpisodeState.episode_uuid,
+            writer.user_uuid,
+            (change.episode_uuid for change in batch),
         )
-        if state is None:
-            state = UserEpisodeState(
-                user_uuid=writer.user_uuid, episode_uuid=uuid, podcast_uuid=change.podcast_uuid
-            )
-            writer.session.add(state)
-        states[uuid] = state
-        if change.podcast_uuid:
-            state.podcast_uuid = change.podcast_uuid
+    }
+    latest_accepted_ms = writer.now_ms + MAX_CLOCK_SKEW_MS
+    changed: set[str] = set()
+    for change in batch:
+        uuid = change.episode_uuid
         for field in FIELDS:
             update = getattr(change, field)
-            if update is None or not _acceptable(field, update.value):
+            if update is None or not _is_int64(update.modified_ms):
                 continue
+            if not _acceptable(field, update.value):
+                continue
+            modified_ms = min(update.modified_ms, latest_accepted_ms)
+            state = states.get(uuid)
             modified_column = f"{field}_modified"
-            current_ms = getattr(state, modified_column)
-            if wins(update.modified_ms, update.value, current_ms, getattr(state, field)):
-                setattr(state, field, update.value)
-                setattr(state, modified_column, update.modified_ms)
-                writer.record(EPISODE, uuid, field, update.modified_ms)
-                changed.add(uuid)
+            current_ms = getattr(state, modified_column) if state else None
+            current_value = getattr(state, field) if state else None
+            if not wins(modified_ms, update.value, current_ms, current_value):
+                continue
+            if state is None:
+                state = UserEpisodeState(
+                    user_uuid=writer.user_uuid, episode_uuid=uuid, podcast_uuid=change.podcast_uuid
+                )
+                writer.session.add(state)
+                states[uuid] = state
+            if change.podcast_uuid:
+                state.podcast_uuid = change.podcast_uuid
+            setattr(state, field, update.value)
+            setattr(state, modified_column, modified_ms)
+            writer.record(EPISODE, uuid, field, modified_ms)
+            changed.add(uuid)
     return changed

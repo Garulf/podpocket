@@ -37,6 +37,9 @@ async def lock_user(session: AsyncSession, user_uuid: str) -> User:
     return user
 
 
+APP_SOURCE = "app"
+
+
 class ChangeWriter:
     def __init__(self, session: AsyncSession, user: User, *, source: str, now_ms: int):
         self.session = session

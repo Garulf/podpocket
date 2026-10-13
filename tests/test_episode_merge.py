@@ -1,6 +1,7 @@
 import dataclasses
 import itertools
 
+import pytest
 from sqlalchemy import select
 
 from podpocket.models import ChangeLog, UserEpisodeState
@@ -8,9 +9,9 @@ from podpocket.sync.episodes import EpisodeChange, FieldUpdate, apply_episode_ch
 from podpocket.sync.writer import ChangeWriter
 
 
-async def apply(services, user_uuid, *changes, source="app"):
+async def apply(services, user_uuid, *changes, source="app", now=1):
     async with services.sessionmaker() as session:
-        writer = await ChangeWriter.begin(session, user_uuid, source=source, now_ms=1)
+        writer = await ChangeWriter.begin(session, user_uuid, source=source, now_ms=now)
         changed = await apply_episode_changes(writer, changes)
         await session.commit()
     return changed
@@ -90,6 +91,69 @@ async def test_invalid_values_are_ignored(services, alice):
     )
 
     assert await apply(services, alice.uuid, change) == set()
+    assert await load(services, alice.uuid, "e") is None
+
+
+async def test_a_losing_change_neither_rewrites_the_podcast_nor_logs(services, alice):
+    await apply(services, alice.uuid, EpisodeChange("e", "p", played_up_to=FieldUpdate(100, 2000)))
+
+    changed = await apply(
+        services, alice.uuid, EpisodeChange("e", "other", played_up_to=FieldUpdate(5, 1000))
+    )
+
+    assert changed == set()
+    assert (await load(services, alice.uuid, "e")).podcast_uuid == "p"
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("played_up_to", 2**63),
+        ("duration", 2**63),
+        ("playing_status", 2**63),
+        ("played_up_to", 1.5),
+        ("played_up_to", "10"),
+        ("playing_status", True),
+        ("archived", 1),
+        ("starred", "yes"),
+        ("deselected_chapters", 5),
+    ],
+)
+async def test_values_out_of_range_or_of_the_wrong_type_are_ignored(services, alice, field, value):
+    change = EpisodeChange("e", "p", **{field: FieldUpdate(value, 1000)})
+
+    assert await apply(services, alice.uuid, change) == set()
+    assert await load(services, alice.uuid, "e") is None
+
+
+@pytest.mark.parametrize("modified", [2**63, -(2**63) - 1, 1.5, True])
+async def test_an_unrepresentable_modified_time_is_ignored(services, alice, modified):
+    change = EpisodeChange("e", "p", played_up_to=FieldUpdate(10, modified))
+
+    assert await apply(services, alice.uuid, change) == set()
+    assert await load(services, alice.uuid, "e") is None
+
+
+async def test_a_far_future_client_clock_cannot_make_a_field_unbeatable(services, alice):
+    now = 1_000_000_000
+    ten_years = 10 * 365 * 24 * 3_600_000
+    await apply(
+        services,
+        alice.uuid,
+        EpisodeChange("e", "p", played_up_to=FieldUpdate(100, now + ten_years)),
+        now=now,
+    )
+    assert (await load(services, alice.uuid, "e")).played_up_to_modified == now + 3_600_000
+
+    await apply(
+        services,
+        alice.uuid,
+        EpisodeChange("e", "p", played_up_to=FieldUpdate(200, now + 7_200_000)),
+        now=now + 7_200_000,
+    )
+
+    state = await load(services, alice.uuid, "e")
+    assert (state.played_up_to, state.played_up_to_modified) == (200, now + 7_200_000)
 
 
 async def test_merge_is_independent_of_arrival_order(services, alice):

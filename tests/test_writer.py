@@ -57,13 +57,14 @@ async def test_stamps_strictly_increase_even_when_the_clock_does_not(services, a
 
 async def test_concurrent_writers_get_distinct_increasing_stamps(services, alice):
     writers = 20
+    before = await last_change(services, alice.uuid)
 
     async def record_one(index):
         return await write(services, alice.uuid, 1, (EPISODE, f"e{index}", "starred", 1))
 
     cursors = await asyncio.gather(*(record_one(index) for index in range(writers)))
 
-    assert len(set(cursors)) == writers
+    assert sorted(cursors) == list(range(before + 1, before + 1 + writers))
     assert await last_change(services, alice.uuid) == max(cursors)
     async with services.sessionmaker() as session:
         stamps = (await session.scalars(select(ChangeLog.server_ms))).all()
