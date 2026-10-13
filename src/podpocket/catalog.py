@@ -121,3 +121,24 @@ async def save_stubs(
                 if attempt:
                     raise
     return []
+
+
+async def episodes_after(
+    session: AsyncSession, podcast_uuid: str, last_episode_uuid: str | None
+) -> list[Episode]:
+    if last_episode_uuid is None:
+        return list(await session.scalars(newest_first(podcast_uuid)))
+    last = await find_episode(session, podcast_uuid, last_episode_uuid)
+    if last is None:
+        return list(await session.scalars(newest_first(podcast_uuid).limit(1)))
+    return list(
+        await session.scalars(
+            newest_first(podcast_uuid).where(
+                Episode.published >= last.published, Episode.uuid != last.uuid
+            )
+        )
+    )
+
+
+async def newest_episode(session: AsyncSession, podcast_uuid: str) -> Episode | None:
+    return await session.scalar(newest_first(podcast_uuid).limit(1))

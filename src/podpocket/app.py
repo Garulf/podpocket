@@ -10,7 +10,7 @@ from podpocket.config import USER_AGENT, Settings
 from podpocket.db import create_engine, create_sessionmaker
 from podpocket.feeds.fetch import guarded_transport
 from podpocket.migrate import upgrade_to_head
-from podpocket.pcapi import cache, search
+from podpocket.pcapi import cache, refresh, search
 from podpocket.services import build_services
 
 
@@ -47,6 +47,7 @@ def create_app(settings: Settings) -> FastAPI:
     app.include_router(health.router)
     app.include_router(cache.router)
     app.include_router(search.router)
+    app.include_router(refresh.router)
     return app
 
 

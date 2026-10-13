@@ -2,7 +2,8 @@ import logging
 
 from podpocket import catalog
 from podpocket.catalog import PodcastSummary
-from podpocket.directory.itunes import DirectoryError
+from podpocket.directory.itunes import DirectoryError, apple_podcast_id
+from podpocket.feeds.errors import FeedError
 from podpocket.services import Services
 
 logger = logging.getLogger(__name__)
@@ -31,3 +32,23 @@ async def find_podcasts(
             seen.add(summary.uuid)
             results.append(summary)
     return results
+
+
+URL_PREFIXES = ("http://", "https://", "feed:", "pcast:", "itpc:", "rss:")
+
+
+def looks_like_url(term: str) -> bool:
+    return term.lower().startswith(URL_PREFIXES)
+
+
+async def resolve_user_url(services: Services, url: str) -> str:
+    apple_id = apple_podcast_id(url)
+    if apple_id is not None:
+        try:
+            found = await services.directory.lookup([apple_id])
+        except DirectoryError as exc:
+            raise FeedError(f"Apple Podcasts lookup failed: {exc}") from exc
+        if not found:
+            raise FeedError("Apple Podcasts has no public feed for that link")
+        url = found[0].feed_url
+    return await services.refresher.resolve(url)
