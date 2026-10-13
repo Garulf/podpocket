@@ -32,3 +32,18 @@ def test_database_settings_need_only_the_database_url(monkeypatch):
     monkeypatch.setenv("PODPOCKET_DATABASE_URL", "sqlite+aiosqlite:///x.db")
 
     assert DatabaseSettings().database_url == "sqlite+aiosqlite:///x.db"
+
+
+@pytest.mark.parametrize("minutes", [0, -5, 1441])
+def test_access_token_lifetime_must_be_between_a_minute_and_a_day(minutes):
+    with pytest.raises(ValidationError, match="access_token_minutes"):
+        Settings(public_url="http://pod.test", secret_key=SECRET, access_token_minutes=minutes)
+
+
+@pytest.mark.parametrize("minutes", [1, 1440])
+def test_access_token_lifetime_accepts_its_bounds(minutes):
+    settings = Settings(
+        public_url="http://pod.test", secret_key=SECRET, access_token_minutes=minutes
+    )
+
+    assert settings.access_token_minutes == minutes

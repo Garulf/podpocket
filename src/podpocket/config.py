@@ -16,7 +16,7 @@ class DatabaseSettings(BaseSettings):
 class Settings(DatabaseSettings):
     public_url: str
     secret_key: SecretStr = Field(min_length=32)
-    access_token_minutes: int = 60
+    access_token_minutes: int = Field(default=60, ge=1, le=1440)
     cache_dir: Path = Path("/cache")
     region: str = "us"
     refresh_interval_minutes: int = 30
