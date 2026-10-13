@@ -3,7 +3,14 @@
   "packages": {
     ".": {
       "release-type": "python",
-      "package-name": "podpocket"
+      "package-name": "podpocket",
+      "extra-files": [
+        {
+          "type": "toml",
+          "path": "uv.lock",
+          "jsonpath": "$.package[?(@.name.value=='podpocket')].version"
+        }
+      ]
     }
   }
 }

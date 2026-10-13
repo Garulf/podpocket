@@ -5,5 +5,4 @@
 project:
   name: podpocket
   tagline: Self-hosted server for the Pod Pocket podcast app
-  pypi: podpocket
 badges: []

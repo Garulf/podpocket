@@ -17,6 +17,8 @@ docker run -p 8000:8000 \
   ghcr.io/garulf/podpocket:latest
 ```
 
+The container runs as uid 1000. Named volumes work as is, but a bind-mounted `/data` or `/cache` must be writable by that uid.
+
 Put it behind a reverse proxy that terminates TLS. The server trusts the forwarded headers it receives, so do not expose port 8000 directly to the internet.
 
 ## Configuration
@@ -58,4 +60,4 @@ Run the server locally with `uv run podpocket serve`.
 
 ## Contributing
 
-Issues and pull requests are welcome.
+Run `uvx --with tox-uv tox` before opening a pull request. Commit messages follow Conventional Commits.

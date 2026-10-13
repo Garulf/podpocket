@@ -56,6 +56,7 @@ def test_server_boots_and_reports_health(tmp_path):
     try:
         deadline = time.monotonic() + 20
         while True:
+            assert server.poll() is None, f"server exited with code {server.returncode}"
             try:
                 response = httpx.get(f"http://127.0.0.1:{port}/health", timeout=1)
                 break
