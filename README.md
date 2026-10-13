@@ -89,13 +89,13 @@ Music Assistant's gPodder provider syncs with this server, so your subscriptions
 | Device ID | Letters, digits and dashes only, for example `music-assistant` |
 
 - Subscriptions are managed in the app. Music Assistant reads them but does not change them.
-- Progress syncs both ways. When the app and Music Assistant both changed an episode, the newer change wins. An episode that Music Assistant reports within 60 seconds of its end counts as played, the same rule Music Assistant uses itself.
-- Music Assistant reads subscriptions and progress when it syncs its library, every 12 hours by default. A new subscription, an unsubscribe or a listening session in the app shows up in Music Assistant after that sync. Resume positions are fetched live when playback starts. To see changes sooner, run a manual sync from the three dot menu of a library view in Music Assistant, or shorten the sync interval (Settings, System, Background Tasks in current versions; the provider's own settings in older ones).
+- Progress syncs both ways. When the app and Music Assistant both changed an episode, the newer change wins. An episode that Music Assistant reports within 60 seconds of its end counts as played, so pausing or stopping in the last minute marks it played in the app and in Music Assistant.
+- Music Assistant reads subscriptions and progress when it syncs its library, every 12 hours by default. A new subscription, an unsubscribe or a listening session in the app shows up in Music Assistant after that sync. Resume positions are fetched live when playback starts. To see changes sooner, open Settings, Providers, the menu of the gPodder provider and choose Synchronize now, or shorten the interval under Settings, System, Background Tasks.
 - Music Assistant's own uploads come back in its next episode download. This is harmless.
 - Music Assistant streams episodes straight from each podcast's feed, not through this server.
 - The gPodder API lives under `/api/2`. Every request carries the password as HTTP Basic auth, so only reach the server over HTTPS.
 - Use an ASCII password for the account Music Assistant signs in with. The server reads Basic credentials as UTF-8 first, and aiohttp sends latin-1, so a password with other characters can fail to match.
-- A Music Assistant that has signed in once keeps working through a lockout on its username: the server remembers a verified password for 7 days of disuse, and a password change or account removal ends that at once. A rate limit on `/api/2` in your reverse proxy is still a good idea.
+- A Music Assistant that has signed in once keeps working through a lockout on its username: the server remembers a verified password for 7 days of disuse, and a password change or account removal ends that at once. The memory lives in the server process, so a restart or a password-hash upgrade clears it, and Music Assistant's next request goes through the normal login checks, including the lockout. A rate limit on `/api/2` in your reverse proxy is still a good idea.
 
 ## Development
 
