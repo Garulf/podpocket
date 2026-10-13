@@ -344,6 +344,41 @@ async def test_backend_connects_to_the_vetted_address(monkeypatch):
     assert inner.connected == [("93.184.216.34", 443)]
 
 
+class FailingFirstBackend(RecordingBackend):
+    def __init__(self, failing):
+        super().__init__()
+        self.failing = failing
+
+    async def connect_tcp(self, host, port, timeout=None, local_address=None, socket_options=None):
+        self.connected.append((host, port))
+        if host in self.failing:
+            raise httpcore.ConnectError(f"cannot reach {host}")
+        return object()
+
+
+async def test_backend_falls_back_to_the_next_vetted_address(monkeypatch):
+    monkeypatch.setattr(
+        fetch_module, "resolve_host", fake_dns({"pub.test": ["93.184.216.34", "1.1.1.1"]})
+    )
+    inner = FailingFirstBackend({"93.184.216.34"})
+
+    await GuardedNetworkBackend(inner).connect_tcp("pub.test", 443)
+
+    assert inner.connected == [("93.184.216.34", 443), ("1.1.1.1", 443)]
+
+
+async def test_backend_raises_the_last_error_when_every_address_fails(monkeypatch):
+    monkeypatch.setattr(
+        fetch_module, "resolve_host", fake_dns({"pub.test": ["93.184.216.34", "1.1.1.1"]})
+    )
+    inner = FailingFirstBackend({"93.184.216.34", "1.1.1.1"})
+
+    with pytest.raises(httpcore.ConnectError, match="cannot reach 1.1.1.1"):
+        await GuardedNetworkBackend(inner).connect_tcp("pub.test", 443)
+
+    assert inner.connected == [("93.184.216.34", 443), ("1.1.1.1", 443)]
+
+
 async def test_backend_refuses_when_any_address_is_private(monkeypatch):
     monkeypatch.setattr(
         fetch_module, "resolve_host", fake_dns({"mixed.test": ["93.184.216.34", "10.0.0.1"]})

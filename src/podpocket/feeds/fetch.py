@@ -60,9 +60,15 @@ class GuardedNetworkBackend(httpcore.AsyncNetworkBackend):
             raise httpcore.ConnectError(f"cannot resolve {host}") from exc
         if not addresses or not _all_public(addresses):
             raise httpcore.ConnectError(f"{host} is not a public address")
-        return await self._inner.connect_tcp(
-            addresses[0], port, timeout, local_address, socket_options
-        )
+        last_error: Exception | None = None
+        for address in addresses:
+            try:
+                return await self._inner.connect_tcp(
+                    address, port, timeout, local_address, socket_options
+                )
+            except (httpcore.ConnectError, httpcore.ConnectTimeout) as exc:
+                last_error = exc
+        raise last_error
 
     async def connect_unix_socket(
         self,
